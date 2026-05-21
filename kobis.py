@@ -109,3 +109,16 @@ def _format_release_date(raw: str) -> str:
     if len(raw) == 8 and raw.isdigit():
         return f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
     return raw
+
+
+def search_movies_with_fallback(title: str, api_key: str) -> List[Movie]:
+    """전처리 후 검색, 결과 0건이면 공백 제거 버전으로 1회 폴백."""
+    primary = preprocess_title(title)
+    movies = search_movies(primary, api_key)
+    if movies:
+        return movies
+
+    fallback = compact_title(primary)
+    if fallback == primary:
+        return []
+    return search_movies(fallback, api_key)

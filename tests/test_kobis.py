@@ -115,3 +115,77 @@ def test_search_movies_raises_after_max_retries():
     import pytest
     with pytest.raises(Exception):
         search_movies("test", api_key="testkey", retry_delays=[0, 0, 0])
+
+
+from kobis import search_movies_with_fallback
+
+
+@responses.activate
+def test_search_movies_with_fallback_uses_preprocessed_first():
+    responses.add(
+        method="GET",
+        url=KOBIS_URL,
+        json={
+            "movieListResult": {
+                "movieList": [
+                    {
+                        "movieCd": "1",
+                        "movieNm": "듄: 파트2",
+                        "openDt": "20240228",
+                        "directors": [],
+                        "genreAlt": "",
+                    }
+                ]
+            }
+        },
+    )
+    movies = search_movies_with_fallback("듄: 파트2", api_key="testkey")
+    assert len(movies) == 1
+    # 전처리 결과 "듄 파트2"로 호출됐는지 확인 (URL 쿼리에 인코딩된 형태로 들어감)
+    request_url = responses.calls[0].request.url
+    # 한글이 URL 인코딩되어 들어가므로 movieNm 파라미터에 값이 있다는 것만 확인
+    assert "movieNm=" in request_url
+    assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_search_movies_with_fallback_falls_back_to_compact():
+    # 첫 호출은 0건, 두 번째 호출(공백 제거)은 1건
+    responses.add(
+        method="GET",
+        url=KOBIS_URL,
+        json={"movieListResult": {"movieList": []}},
+    )
+    responses.add(
+        method="GET",
+        url=KOBIS_URL,
+        json={
+            "movieListResult": {
+                "movieList": [
+                    {
+                        "movieCd": "2",
+                        "movieNm": "어벤져스엔드게임",
+                        "openDt": "20190424",
+                        "directors": [],
+                        "genreAlt": "",
+                    }
+                ]
+            }
+        },
+    )
+    movies = search_movies_with_fallback("어벤져스 엔드게임", api_key="testkey")
+    assert len(movies) == 1
+    assert len(responses.calls) == 2
+
+
+@responses.activate
+def test_search_movies_with_fallback_no_compact_when_already_no_spaces():
+    # "단어"는 공백이 없으므로 compact_title 결과가 동일 → 폴백 안 함
+    responses.add(
+        method="GET",
+        url=KOBIS_URL,
+        json={"movieListResult": {"movieList": []}},
+    )
+    movies = search_movies_with_fallback("단어", api_key="testkey")
+    assert movies == []
+    assert len(responses.calls) == 1
