@@ -121,7 +121,8 @@ from kobis import search_movies_with_fallback
 
 
 @responses.activate
-def test_search_movies_with_fallback_uses_preprocessed_first():
+def test_search_movies_with_fallback_uses_raw_first():
+    """원본 그대로 보내서 결과 있으면 그것 반환 (전처리 안 거침)."""
     responses.add(
         method="GET",
         url=KOBIS_URL,
@@ -141,21 +142,20 @@ def test_search_movies_with_fallback_uses_preprocessed_first():
     )
     movies = search_movies_with_fallback("듄: 파트2", api_key="testkey")
     assert len(movies) == 1
-    # 전처리 결과 "듄 파트2"로 호출됐는지 확인 (URL 쿼리에 인코딩된 형태로 들어감)
-    request_url = responses.calls[0].request.url
-    # 한글이 URL 인코딩되어 들어가므로 movieNm 파라미터에 값이 있다는 것만 확인
-    assert "movieNm=" in request_url
+    # 단 1회만 호출되었어야 함 (원본으로 찾음)
     assert len(responses.calls) == 1
 
 
 @responses.activate
-def test_search_movies_with_fallback_falls_back_to_compact():
-    # 첫 호출은 0건, 두 번째 호출(공백 제거)은 1건
+def test_search_movies_with_fallback_falls_back_to_preprocessed():
+    """원본 0건이면 전처리 변형으로 재시도."""
+    # 첫 호출(원본): 0건
     responses.add(
         method="GET",
         url=KOBIS_URL,
         json={"movieListResult": {"movieList": []}},
     )
+    # 두 번째 호출(전처리): 1건
     responses.add(
         method="GET",
         url=KOBIS_URL,
@@ -164,6 +164,43 @@ def test_search_movies_with_fallback_falls_back_to_compact():
                 "movieList": [
                     {
                         "movieCd": "2",
+                        "movieNm": "테스트",
+                        "openDt": "20200101",
+                        "directors": [],
+                        "genreAlt": "",
+                    }
+                ]
+            }
+        },
+    )
+    # "테스트 :" 같은 입력 — 원본과 preprocessed가 다름
+    movies = search_movies_with_fallback("테스트 :", api_key="testkey")
+    assert len(movies) == 1
+    assert len(responses.calls) == 2
+
+
+@responses.activate
+def test_search_movies_with_fallback_falls_back_to_compact():
+    """원본/전처리 모두 0건이면 공백 제거 버전 시도.
+
+    "어벤져스 엔드게임"은 preprocess_title 결과가 원본과 동일하므로
+    변형 목록은 raw + compact 2개뿐 → API 호출도 2회.
+    """
+    # 첫 호출(원본 "어벤져스 엔드게임"): 0건
+    responses.add(
+        method="GET",
+        url=KOBIS_URL,
+        json={"movieListResult": {"movieList": []}},
+    )
+    # 두 번째 호출(compact "어벤져스엔드게임"): 1건
+    responses.add(
+        method="GET",
+        url=KOBIS_URL,
+        json={
+            "movieListResult": {
+                "movieList": [
+                    {
+                        "movieCd": "3",
                         "movieNm": "어벤져스엔드게임",
                         "openDt": "20190424",
                         "directors": [],
@@ -175,12 +212,13 @@ def test_search_movies_with_fallback_falls_back_to_compact():
     )
     movies = search_movies_with_fallback("어벤져스 엔드게임", api_key="testkey")
     assert len(movies) == 1
+    # 원본과 preprocessed가 동일해서 중복 제거 → raw + compact = 2회 호출
     assert len(responses.calls) == 2
 
 
 @responses.activate
-def test_search_movies_with_fallback_no_compact_when_already_no_spaces():
-    # "단어"는 공백이 없으므로 compact_title 결과가 동일 → 폴백 안 함
+def test_search_movies_with_fallback_no_variation_for_simple_title():
+    """공백/특수문자 없는 단어는 변형 후보가 1개뿐."""
     responses.add(
         method="GET",
         url=KOBIS_URL,

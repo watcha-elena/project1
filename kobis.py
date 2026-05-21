@@ -114,13 +114,34 @@ def _format_release_date(raw: str) -> str:
 
 
 def search_movies_with_fallback(title: str, api_key: str) -> List[Movie]:
-    """전처리 후 검색, 결과 0건이면 공백 제거 버전으로 1회 폴백."""
-    primary = preprocess_title(title)
-    movies = search_movies(primary, api_key)
-    if movies:
-        return movies
+    """여러 변형을 순차적으로 시도하여 KOBIS 검색.
 
-    fallback = compact_title(primary)
-    if fallback == primary:
+    KOBIS는 movieNm에 대해 부분 일치 검색을 수행하므로, 정확한
+    원본 제목(콜론 등 특수문자 포함)이 가장 잘 맞는 경우가 많다.
+
+    시도 순서:
+      1. 원본 title (사용자 입력 그대로) — 정확도 최우선
+      2. preprocess_title 결과 (특수문자/연속공백 정리)
+      3. compact_title 결과 (모든 공백 제거)
+
+    중복은 자동 제거. 첫 번째로 결과가 있는 변형의 결과를 반환.
+    """
+    raw = title.strip()
+    if not raw:
         return []
-    return search_movies(fallback, api_key)
+
+    variations: List[str] = [raw]
+
+    preprocessed = preprocess_title(raw)
+    if preprocessed and preprocessed != raw:
+        variations.append(preprocessed)
+
+    compact = compact_title(preprocessed if preprocessed else raw)
+    if compact and compact not in variations:
+        variations.append(compact)
+
+    for query in variations:
+        results = search_movies(query, api_key)
+        if results:
+            return results
+    return []
