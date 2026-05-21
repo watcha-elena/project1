@@ -27,30 +27,60 @@ class MatchOutcome:
 def pick_admin_match(
     kobis_movie: Movie, candidates: List[AdminMatch]
 ) -> Optional[AdminMatch]:
-    """admin 후보 중 KOBIS와 가장 잘 맞는 항목 선택.
+    """admin 후보 중 KOBIS와 일치하는 항목 선택.
 
-    매칭 전략:
-      1. year가 동일한 후보만 남김
-      2. title 정확히 일치하면 그것
-      3. title 비교 무관하게 year 일치하는 첫 항목 선택 (admin 검색 자체가
-         title로 이미 필터링한 결과이므로 year만 맞으면 같은 작품으로 간주)
-      4. year 일치 후보 없으면 None
+    매칭 규칙:
+      1. year가 KOBIS year와 동일한 후보만 남김
+      2. 그 중 title이 KOBIS title 또는 title_en과 (대소문자 무시 후) 일치하는 게 있으면 그것
+      3. 일치 없으면 (대소문자 무시 후) 부분 포함 — KOBIS title 또는 title_en이
+         admin title에 포함되거나 그 반대인 첫 후보
+      4. 위 어느 조건도 만족 못 하면 None (admin이 무관한 결과를 반환했을 가능성)
+
+    예외: KOBIS year가 None이면 candidates의 첫 후보 반환 (정보 부족).
     """
     if not candidates:
         return None
     if kobis_movie.year is None:
-        # year 정보 없으면 admin 첫 결과 사용
         return candidates[0]
 
     same_year = [c for c in candidates if c.year == kobis_movie.year]
     if not same_year:
         return None
 
-    exact_title = [c for c in same_year if c.title == kobis_movie.title]
-    if exact_title:
-        return exact_title[0]
+    kobis_titles = _normalize_title_set(kobis_movie)
+    if not kobis_titles:
+        # KOBIS title 정보가 모두 비어있으면 year만 일치하는 첫 후보 (드문 케이스)
+        return same_year[0]
 
-    return same_year[0]
+    # 1차: exact match (정규화 후)
+    for c in same_year:
+        if _normalize(c.title) in kobis_titles:
+            return c
+
+    # 2차: 부분 포함 match (한쪽이 다른 쪽에 포함)
+    for c in same_year:
+        admin_norm = _normalize(c.title)
+        for kt in kobis_titles:
+            if admin_norm and kt and (kt in admin_norm or admin_norm in kt):
+                return c
+
+    # 3차: title 관련성 부족 → admin이 무관한 기본 목록을 반환한 경우로 추정
+    return None
+
+
+def _normalize(text: str) -> str:
+    """제목 비교용 정규화: lower + 모든 공백 제거."""
+    import re
+    return re.sub(r"\s+", "", text.lower())
+
+
+def _normalize_title_set(kobis_movie: Movie) -> set:
+    """KOBIS의 한글/영문 제목을 정규화한 집합. 빈 문자열은 제외."""
+    titles = {
+        _normalize(kobis_movie.title),
+        _normalize(kobis_movie.title_en),
+    }
+    return {t for t in titles if t}
 
 
 def build_outcome(

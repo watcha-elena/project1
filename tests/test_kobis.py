@@ -189,3 +189,50 @@ def test_search_movies_with_fallback_no_compact_when_already_no_spaces():
     movies = search_movies_with_fallback("단어", api_key="testkey")
     assert movies == []
     assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_search_movies_extracts_english_title():
+    responses.add(
+        method="GET",
+        url=KOBIS_URL,
+        json={
+            "movieListResult": {
+                "movieList": [
+                    {
+                        "movieCd": "1",
+                        "movieNm": "듄: 파트2",
+                        "movieNmEn": "Dune: Part Two",
+                        "openDt": "20240228",
+                        "directors": [],
+                        "genreAlt": "",
+                    }
+                ]
+            }
+        },
+    )
+    movies = search_movies("듄", api_key="testkey")
+    assert movies[0].title_en == "Dune: Part Two"
+
+
+@responses.activate
+def test_search_movies_missing_english_title_defaults_to_empty():
+    responses.add(
+        method="GET",
+        url=KOBIS_URL,
+        json={
+            "movieListResult": {
+                "movieList": [
+                    {
+                        "movieCd": "1",
+                        "movieNm": "한글전용",
+                        "openDt": "20200101",
+                        "directors": [],
+                        "genreAlt": "",
+                    }
+                ]
+            }
+        },
+    )
+    movies = search_movies("test", api_key="testkey")
+    assert movies[0].title_en == ""

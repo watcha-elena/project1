@@ -19,13 +19,13 @@ def test_pick_admin_match_exact_year_and_title():
     assert chosen.id == "1"
 
 
-def test_pick_admin_match_year_only_when_title_differs():
+def test_pick_admin_match_returns_none_when_year_matches_but_title_unrelated():
+    """admin이 검색결과 없을 때 기본 목록(연도 일치하지만 무관한 작품)을 반환하는 케이스 방어."""
     candidates = [
-        admin(id="1", title="DUNE 2", year=2024),
-        admin(id="2", title="DUNE 1", year=2021),
+        admin(id="1", title="Random Movie", year=2024),
+        admin(id="2", title="Another Unrelated", year=2024),
     ]
-    chosen = pick_admin_match(kobis(), candidates)
-    assert chosen.id == "1"
+    assert pick_admin_match(kobis(), candidates) is None
 
 
 def test_pick_admin_match_returns_none_for_no_candidates():
@@ -57,3 +57,54 @@ def test_build_outcome_admin_not_found():
 def test_build_outcome_no_kobis():
     outcome = build_outcome(user_input="x", kobis_movie=None, admin_match=None)
     assert outcome.status == "kobis_not_found"
+
+
+def test_pick_admin_match_uses_english_title():
+    """KOBIS title_en이 admin title과 일치하면 매칭."""
+    from kobis import Movie
+    k = Movie(
+        code="c",
+        title="듄: 파트2",
+        release_date="2024-02-28",
+        directors=[],
+        genres=[],
+        title_en="Dune: Part Two",
+    )
+    candidates = [
+        admin(id="1", title="Dune: Part Two", year=2024),
+        admin(id="2", title="Some Other Movie", year=2024),
+    ]
+    chosen = pick_admin_match(k, candidates)
+    assert chosen.id == "1"
+
+
+def test_pick_admin_match_case_insensitive():
+    """대소문자/공백 차이 정규화 후 매칭."""
+    from kobis import Movie
+    k = Movie(
+        code="c",
+        title="듄: 파트2",
+        release_date="2024-02-28",
+        directors=[],
+        genres=[],
+        title_en="Dune: Part Two",
+    )
+    candidates = [admin(id="1", title="DUNE: PART TWO", year=2024)]
+    chosen = pick_admin_match(k, candidates)
+    assert chosen.id == "1"
+
+
+def test_pick_admin_match_partial_contains():
+    """admin title이 KOBIS title을 포함하는 경우 (또는 반대)."""
+    from kobis import Movie
+    k = Movie(
+        code="c",
+        title="아바타",
+        release_date="2022-12-14",
+        directors=[],
+        genres=[],
+        title_en="Avatar",
+    )
+    candidates = [admin(id="1", title="Avatar: The Way of Water", year=2022)]
+    chosen = pick_admin_match(k, candidates)
+    assert chosen.id == "1"

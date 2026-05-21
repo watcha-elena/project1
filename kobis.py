@@ -26,6 +26,7 @@ class Movie:
     release_date: str
     directors: List[str] = field(default_factory=list)
     genres: List[str] = field(default_factory=list)
+    title_en: str = ""
 
     @property
     def year(self) -> Optional[int]:
@@ -99,6 +100,7 @@ def _parse_movie_list(data: dict) -> List[Movie]:
                 genres=[
                     g.strip() for g in item.get("genreAlt", "").split(",") if g.strip()
                 ],
+                title_en=item.get("movieNmEn", "").strip(),
             )
         )
     return movies
