@@ -1,4 +1,4 @@
-"""편성 자동화 대시보드 Streamlit 진입점."""
+"""편성작 검색기 Streamlit 진입점."""
 import streamlit as st
 
 from admin import AdminClient
@@ -6,7 +6,7 @@ from auth import LoginRateLimiter
 import pandas as pd
 
 
-PAGE_TITLE = "편성 자동화 대시보드"
+PAGE_TITLE = "편성작 검색기"
 MAX_TITLES = 100
 
 
@@ -27,7 +27,7 @@ def init_session_state() -> None:
 
 
 def render_login_screen() -> None:
-    st.title(f"📺 {PAGE_TITLE}")
+    st.title(f"🔍 {PAGE_TITLE}")
     st.caption("사내 admin 계정으로 로그인하세요.")
 
     limiter: LoginRateLimiter = st.session_state.rate_limiter
@@ -82,7 +82,7 @@ def render_login_screen() -> None:
 
 
 def render_main_screen() -> None:
-    st.title(f"📺 {PAGE_TITLE}")
+    st.title(f"🔍 {PAGE_TITLE}")
     col1, col2 = st.columns([4, 1])
     with col2:
         if st.button("로그아웃", use_container_width=True):
@@ -644,7 +644,7 @@ def run_matching(titles: list) -> list:
 
 
 def main() -> None:
-    st.set_page_config(page_title=PAGE_TITLE, page_icon="📺", layout="wide")
+    st.set_page_config(page_title=PAGE_TITLE, page_icon="🔍", layout="wide")
     st.markdown(
         """
         <style>
