@@ -1,8 +1,15 @@
 """편성 자동화 대시보드 Streamlit 진입점."""
 import streamlit as st
+from streamlit_cookies_controller import CookieController
 
 from admin import AdminClient
 from auth import LoginRateLimiter
+from persist import (
+    COOKIE_NAME,
+    COOKIE_TTL_SECONDS,
+    decrypt_credentials,
+    encrypt_credentials,
+)
 import pandas as pd
 
 
@@ -10,8 +17,15 @@ PAGE_TITLE = "편성 자동화 대시보드"
 MAX_TITLES = 100
 
 
+def _get_cookie_controller() -> CookieController:
+    """CookieController 인스턴스는 세션 단위로 1개 유지."""
+    if "cookie_controller" not in st.session_state:
+        st.session_state.cookie_controller = CookieController()
+    return st.session_state.cookie_controller
+
+
 def init_session_state() -> None:
-    """세션 상태 초기화 (한 번만)."""
+    """세션 상태 초기화 + 쿠키 기반 자동 복원."""
     if "rate_limiter" not in st.session_state:
         st.session_state.rate_limiter = LoginRateLimiter()
     if "admin_email" not in st.session_state:
@@ -24,6 +38,20 @@ def init_session_state() -> None:
         st.session_state.results = None
     if "pending_titles" not in st.session_state:
         st.session_state.pending_titles = None
+
+    # 쿠키에서 자격증명 복원 (이미 로그인 상태가 아닐 때만)
+    if not st.session_state.logged_in:
+        controller = _get_cookie_controller()
+        token = controller.get(COOKIE_NAME)
+        if token:
+            restored = decrypt_credentials(token)
+            if restored:
+                st.session_state.admin_email = restored[0]
+                st.session_state.admin_password = restored[1]
+                st.session_state.logged_in = True
+            else:
+                # 만료/위변조 쿠키는 정리
+                controller.remove(COOKIE_NAME)
 
 
 def render_login_screen() -> None:
@@ -68,6 +96,13 @@ def render_login_screen() -> None:
             st.session_state.admin_email = email
             st.session_state.admin_password = password
             st.session_state.logged_in = True
+            # 쿠키에 암호화된 자격증명 저장 (24시간 유지)
+            controller = _get_cookie_controller()
+            controller.set(
+                COOKIE_NAME,
+                encrypt_credentials(email, password),
+                max_age=COOKIE_TTL_SECONDS,
+            )
             st.rerun()
         else:
             limiter.record_failure()
@@ -86,6 +121,9 @@ def render_main_screen() -> None:
     col1, col2 = st.columns([4, 1])
     with col2:
         if st.button("로그아웃", use_container_width=True):
+            # 쿠키 즉시 삭제
+            controller = _get_cookie_controller()
+            controller.remove(COOKIE_NAME)
             st.session_state.admin_email = None
             st.session_state.admin_password = None
             st.session_state.logged_in = False

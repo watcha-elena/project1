@@ -54,10 +54,17 @@ ADMIN_EMAIL="..." ADMIN_PW="..." python scripts/manual_test_admin_search.py "어
 1. 이 저장소를 GitHub에 푸시
 2. https://streamlit.io/cloud → "New app" → 저장소 선택
 3. Main file: `app.py`
-4. Secrets에 추가:
+4. Secrets에 추가 (둘 다 필요):
    ```toml
    KOBIS_API_KEY = "<발급받은 키>"
+   COOKIE_FERNET_KEY = "<로컬 secrets.toml과 동일한 키, 한 번 발급 후 변경 금지>"
    ```
+   
+   `COOKIE_FERNET_KEY`는 자격증명 암호화용 키입니다. 다음 명령으로 한 번 생성하세요:
+   ```bash
+   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+   이 키를 바꾸면 기존 로그인 쿠키가 모두 무효화됩니다.
 5. Deploy
 
 이후 git push만 하면 자동 재배포.
