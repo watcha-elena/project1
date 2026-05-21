@@ -44,3 +44,74 @@ def test_movie_year_returns_none_for_empty_release_date():
 def test_movie_year_handles_unknown_format():
     movie = Movie(code="x", title="x", release_date="미정", directors=[], genres=[])
     assert movie.year is None
+
+
+import responses
+from kobis import search_movies
+
+
+KOBIS_URL = "https://www.kobis.or.kr/kobisopenapi/webservice/rest/movie/searchMovieList.json"
+
+
+@responses.activate
+def test_search_movies_returns_movies():
+    responses.add(
+        method="GET",
+        url=KOBIS_URL,
+        json={
+            "movieListResult": {
+                "movieList": [
+                    {
+                        "movieCd": "20240001",
+                        "movieNm": "듄: 파트2",
+                        "openDt": "20240228",
+                        "directors": [{"peopleNm": "드니 빌뇌브"}],
+                        "genreAlt": "SF,액션",
+                    }
+                ]
+            }
+        },
+    )
+    movies = search_movies("듄", api_key="testkey")
+    assert len(movies) == 1
+    assert movies[0].code == "20240001"
+    assert movies[0].title == "듄: 파트2"
+    assert movies[0].release_date == "2024-02-28"
+    assert movies[0].year == 2024
+    assert movies[0].directors == ["드니 빌뇌브"]
+    assert movies[0].genres == ["SF", "액션"]
+
+
+@responses.activate
+def test_search_movies_returns_empty_for_no_results():
+    responses.add(
+        method="GET",
+        url=KOBIS_URL,
+        json={"movieListResult": {"movieList": []}},
+    )
+    movies = search_movies("이상한작품명없음", api_key="testkey")
+    assert movies == []
+
+
+@responses.activate
+def test_search_movies_retries_on_network_error():
+    # 첫 두 번은 500, 세 번째는 정상
+    responses.add(method="GET", url=KOBIS_URL, status=500)
+    responses.add(method="GET", url=KOBIS_URL, status=500)
+    responses.add(
+        method="GET",
+        url=KOBIS_URL,
+        json={"movieListResult": {"movieList": []}},
+    )
+    movies = search_movies("test", api_key="testkey", retry_delays=[0, 0, 0])
+    assert movies == []
+    assert len(responses.calls) == 3
+
+
+@responses.activate
+def test_search_movies_raises_after_max_retries():
+    for _ in range(3):
+        responses.add(method="GET", url=KOBIS_URL, status=500)
+    import pytest
+    with pytest.raises(Exception):
+        search_movies("test", api_key="testkey", retry_delays=[0, 0, 0])
