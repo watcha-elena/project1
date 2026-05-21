@@ -16,11 +16,20 @@ class AdminMatch:
 
 @dataclass
 class MatchOutcome:
-    """한 작품의 처리 결과 + 상태."""
+    """한 작품의 처리 결과 + 상태.
+
+    status 값:
+      - "success": 매칭 성공 (result 포함)
+      - "kobis_not_found": KOBIS와 admin 모두에서 찾지 못함
+      - "admin_not_found": KOBIS는 찾았으나 admin에서 못 찾음
+      - "kobis_ambiguous": KOBIS 결과가 여러 건이라 사용자 선택 필요
+      - "admin_only_ambiguous": KOBIS 0건이지만 admin이 여러 건 반환, 사용자 선택 필요
+    """
     user_input: str
-    status: str  # "success", "kobis_not_found", "admin_not_found", "kobis_ambiguous"
+    status: str
     result: Optional[MatchResult] = None
-    kobis_candidates: Optional[List[Movie]] = None  # for kobis_ambiguous
+    kobis_candidates: Optional[List[Movie]] = None
+    admin_candidates: Optional[List[AdminMatch]] = None
     reason: str = ""
 
 
