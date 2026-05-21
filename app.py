@@ -1,14 +1,14 @@
 """편성 자동화 대시보드 Streamlit 진입점."""
 import streamlit as st
-from streamlit_cookies_manager import EncryptedCookieManager
+from streamlit_cookies_controller import CookieController
 
 from admin import AdminClient
 from auth import LoginRateLimiter
 from persist import (
-    COOKIE_KEY,
-    COOKIE_PREFIX,
-    pack_credentials,
-    unpack_credentials,
+    COOKIE_NAME,
+    COOKIE_TTL_SECONDS,
+    decrypt_credentials,
+    encrypt_credentials,
 )
 import pandas as pd
 
@@ -17,14 +17,11 @@ PAGE_TITLE = "편성 자동화 대시보드"
 MAX_TITLES = 100
 
 
-def _get_cookie_manager() -> EncryptedCookieManager:
-    """EncryptedCookieManager 인스턴스는 세션 단위로 1개 유지."""
-    if "cookie_manager" not in st.session_state:
-        st.session_state.cookie_manager = EncryptedCookieManager(
-            prefix=COOKIE_PREFIX,
-            password=st.secrets["COOKIE_FERNET_KEY"],
-        )
-    return st.session_state.cookie_manager
+def _get_cookie_controller() -> CookieController:
+    """CookieController 인스턴스는 세션 단위로 1개 유지."""
+    if "cookie_controller" not in st.session_state:
+        st.session_state.cookie_controller = CookieController()
+    return st.session_state.cookie_controller
 
 
 def init_session_state() -> None:
@@ -42,35 +39,19 @@ def init_session_state() -> None:
     if "pending_titles" not in st.session_state:
         st.session_state.pending_titles = None
 
-
-def restore_session_from_cookies() -> None:
-    """쿠키 매니저가 준비되면 자격증명을 복원한다.
-
-    EncryptedCookieManager.ready()가 False이면 첫 렌더에서 컴포넌트가
-    아직 쿠키를 읽어오지 못한 상태이므로 st.stop()으로 대기시킨다.
-    """
-    cookies = _get_cookie_manager()
-    if not cookies.ready():
-        # 쿠키가 로드될 때까지 잠시 대기. 컴포넌트가 자동 rerun 한다.
-        st.stop()
-
-    if st.session_state.logged_in:
-        return
-
-    token = cookies.get(COOKIE_KEY)
-    if not token:
-        return
-
-    restored = unpack_credentials(token)
-    if restored:
-        st.session_state.admin_email = restored[0]
-        st.session_state.admin_password = restored[1]
-        st.session_state.logged_in = True
-    else:
-        # 만료/파손 쿠키는 정리
-        if COOKIE_KEY in cookies:
-            del cookies[COOKIE_KEY]
-            cookies.save()
+    # 쿠키에서 자격증명 복원 (이미 로그인 상태가 아닐 때만)
+    if not st.session_state.logged_in:
+        controller = _get_cookie_controller()
+        token = controller.get(COOKIE_NAME)
+        if token:
+            restored = decrypt_credentials(token)
+            if restored:
+                st.session_state.admin_email = restored[0]
+                st.session_state.admin_password = restored[1]
+                st.session_state.logged_in = True
+            else:
+                # 만료/위변조 쿠키는 정리
+                controller.remove(COOKIE_NAME)
 
 
 def render_login_screen() -> None:
@@ -111,13 +92,17 @@ def render_login_screen() -> None:
                 test_client.stop()
         if ok:
             limiter.record_success()
+            # 자격증명만 메모리에 보관. 매칭 실행 시마다 새 브라우저로 재로그인.
             st.session_state.admin_email = email
             st.session_state.admin_password = password
             st.session_state.logged_in = True
-            # 쿠키에 자격증명 저장 (라이브러리가 자체 암호화)
-            cookies = _get_cookie_manager()
-            cookies[COOKIE_KEY] = pack_credentials(email, password)
-            cookies.save()
+            # 쿠키에 암호화된 자격증명 저장 (24시간 유지)
+            controller = _get_cookie_controller()
+            controller.set(
+                COOKIE_NAME,
+                encrypt_credentials(email, password),
+                max_age=COOKIE_TTL_SECONDS,
+            )
             st.rerun()
         else:
             limiter.record_failure()
@@ -136,10 +121,9 @@ def render_main_screen() -> None:
     col1, col2 = st.columns([4, 1])
     with col2:
         if st.button("로그아웃", use_container_width=True):
-            cookies = _get_cookie_manager()
-            if COOKIE_KEY in cookies:
-                del cookies[COOKIE_KEY]
-                cookies.save()
+            # 쿠키 즉시 삭제
+            controller = _get_cookie_controller()
+            controller.remove(COOKIE_NAME)
             st.session_state.admin_email = None
             st.session_state.admin_password = None
             st.session_state.logged_in = False
@@ -589,7 +573,6 @@ def main() -> None:
         unsafe_allow_html=True,
     )
     init_session_state()
-    restore_session_from_cookies()
 
     if st.session_state.logged_in:
         render_main_screen()
