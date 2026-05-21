@@ -89,6 +89,13 @@ def render_main_screen() -> None:
             st.session_state.results = None
             st.rerun()
 
+    if st.session_state.pending_titles is not None:
+        with st.spinner("매칭 진행 중..."):
+            outcomes = run_matching(st.session_state.pending_titles)
+        st.session_state.results = outcomes
+        st.session_state.pending_titles = None
+        st.rerun()
+
     if st.session_state.results is not None:
         render_result_screen()
         return
@@ -151,6 +158,80 @@ def render_result_screen() -> None:
     if st.button("입력으로 돌아가기"):
         st.session_state.results = None
         st.rerun()
+
+
+from kobis import search_movies_with_fallback
+from matcher import MatchOutcome, build_outcome, pick_admin_match
+
+
+def run_matching(titles: list) -> list:
+    """모든 작품에 대해 KOBIS + admin 매칭을 순차 실행.
+
+    중간에 한 작품이 실패해도 다음 작품은 계속 처리.
+    """
+    api_key = st.secrets["KOBIS_API_KEY"]
+    admin_client: AdminClient = st.session_state.admin_client
+
+    progress_bar = st.progress(0.0)
+    status_text = st.empty()
+    outcomes: list = []
+
+    total = len(titles)
+    for i, title in enumerate(titles, start=1):
+        status_text.text(f"[{i}/{total}] {title} 처리 중...")
+
+        # KOBIS
+        try:
+            kobis_results = search_movies_with_fallback(title, api_key)
+        except Exception as exc:
+            outcomes.append(
+                MatchOutcome(
+                    user_input=title,
+                    status="kobis_not_found",
+                    reason=f"KOBIS 오류: {exc}",
+                )
+            )
+            progress_bar.progress(i / total)
+            continue
+
+        if not kobis_results:
+            outcomes.append(build_outcome(title, None, None))
+            progress_bar.progress(i / total)
+            continue
+
+        if len(kobis_results) > 1:
+            outcomes.append(
+                MatchOutcome(
+                    user_input=title,
+                    status="kobis_ambiguous",
+                    kobis_candidates=kobis_results,
+                )
+            )
+            progress_bar.progress(i / total)
+            continue
+
+        kobis_movie = kobis_results[0]
+
+        # admin
+        try:
+            admin_candidates = admin_client.search(kobis_movie.title)
+        except Exception as exc:
+            outcomes.append(
+                MatchOutcome(
+                    user_input=title,
+                    status="admin_not_found",
+                    reason=f"admin 오류: {exc}",
+                )
+            )
+            progress_bar.progress(i / total)
+            continue
+
+        admin_match = pick_admin_match(kobis_movie, admin_candidates)
+        outcomes.append(build_outcome(title, kobis_movie, admin_match))
+        progress_bar.progress(i / total)
+
+    status_text.text("완료")
+    return outcomes
 
 
 def main() -> None:
