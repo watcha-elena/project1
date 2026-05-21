@@ -3,9 +3,11 @@ import streamlit as st
 
 from admin import AdminClient
 from auth import LoginRateLimiter
+import pandas as pd
 
 
 PAGE_TITLE = "편성 자동화 대시보드"
+MAX_TITLES = 100
 
 
 def init_session_state() -> None:
@@ -18,6 +20,8 @@ def init_session_state() -> None:
         st.session_state.logged_in = False
     if "results" not in st.session_state:
         st.session_state.results = None
+    if "pending_titles" not in st.session_state:
+        st.session_state.pending_titles = None
 
 
 def render_login_screen() -> None:
@@ -75,12 +79,76 @@ def render_login_screen() -> None:
 
 def render_main_screen() -> None:
     st.title(f"📺 {PAGE_TITLE}")
-    st.success("로그인됨. (메인 화면은 다음 Task에서 구현됨)")
-    if st.button("로그아웃"):
-        if st.session_state.admin_client:
-            st.session_state.admin_client.stop()
-        st.session_state.admin_client = None
-        st.session_state.logged_in = False
+    col1, col2 = st.columns([4, 1])
+    with col2:
+        if st.button("로그아웃", use_container_width=True):
+            if st.session_state.admin_client:
+                st.session_state.admin_client.stop()
+            st.session_state.admin_client = None
+            st.session_state.logged_in = False
+            st.session_state.results = None
+            st.rerun()
+
+    if st.session_state.results is not None:
+        render_result_screen()
+        return
+
+    st.subheader("작품 리스트 입력")
+    st.caption(f"최대 {MAX_TITLES}개까지 한 번에 처리할 수 있습니다.")
+
+    tab_text, tab_file = st.tabs(["📝 텍스트 붙여넣기", "📂 엑셀 파일 업로드"])
+
+    titles: list = []
+
+    with tab_text:
+        raw = st.text_area(
+            "한 줄에 작품 하나씩 입력",
+            height=200,
+            placeholder="어벤져스: 엔드게임\n인사이드 아웃 2\n듄: 파트2",
+        )
+        if raw:
+            titles = [t.strip() for t in raw.splitlines() if t.strip()]
+
+    with tab_file:
+        uploaded = st.file_uploader(
+            "엑셀 파일 (첫 컬럼이 작품명)",
+            type=["xlsx", "xls"],
+            accept_multiple_files=False,
+        )
+        if uploaded is not None:
+            try:
+                df = pd.read_excel(uploaded)
+                first_col = df.iloc[:, 0].dropna().astype(str).tolist()
+                titles = [t.strip() for t in first_col if t.strip()]
+            except Exception as exc:
+                st.error(f"엑셀 파일을 읽는 중 오류: {exc}")
+
+    # 중복 제거 + 개수 검증
+    deduped = list(dict.fromkeys(titles))
+    removed = len(titles) - len(deduped)
+    if removed > 0:
+        st.info(f"중복 {removed}건이 자동 제거되었습니다.")
+    titles = deduped
+
+    if len(titles) > MAX_TITLES:
+        st.warning(f"최대 {MAX_TITLES}개까지만 처리할 수 있습니다. 처음 {MAX_TITLES}개만 사용됩니다.")
+        titles = titles[:MAX_TITLES]
+
+    st.write(f"**처리 대기: {len(titles)}건**")
+
+    if st.button(
+        "🔍 매칭 시작",
+        type="primary",
+        disabled=len(titles) == 0,
+    ):
+        st.session_state.pending_titles = titles
+        st.rerun()
+
+
+def render_result_screen() -> None:
+    """결과 화면 placeholder — Task 14/15에서 구현."""
+    st.info("결과 화면은 다음 Task에서 구현됨")
+    if st.button("입력으로 돌아가기"):
         st.session_state.results = None
         st.rerun()
 
