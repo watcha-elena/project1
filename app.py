@@ -153,9 +153,112 @@ def render_main_screen() -> None:
 
 
 def render_result_screen() -> None:
-    """결과 화면 placeholder — Task 14/15에서 구현."""
-    st.info("결과 화면은 다음 Task에서 구현됨")
-    if st.button("입력으로 돌아가기"):
+    from excel import tsv_id_code_title, tsv_release_date, xlsx_bytes
+    from datetime import datetime
+
+    outcomes = st.session_state.results
+
+    successes = [o for o in outcomes if o.status == "success"]
+    ambiguous = [o for o in outcomes if o.status == "kobis_ambiguous"]
+    failures = [
+        o for o in outcomes if o.status in ("kobis_not_found", "admin_not_found")
+    ]
+
+    # 요약 카드
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("총 작품", len(outcomes))
+    c2.metric("✅ 매칭 성공", len(successes))
+    c3.metric("⚠️ 동명이작 선택", len(ambiguous))
+    c4.metric("❌ 매칭 실패", len(failures))
+
+    # 동명이작 선택 영역
+    if ambiguous:
+        st.divider()
+        st.subheader("⚠️ 동명이작 선택이 필요한 작품")
+        for idx, o in enumerate(ambiguous):
+            with st.container(border=True):
+                st.markdown(f"**검색어**: {o.user_input}")
+                options = []
+                for c in o.kobis_candidates:
+                    year = c.year if c.year else "?"
+                    directors = ", ".join(c.directors) if c.directors else "감독 정보 없음"
+                    genres = ", ".join(c.genres) if c.genres else "장르 정보 없음"
+                    options.append(
+                        f"{c.title} ({year}) — {directors}, {genres}"
+                    )
+                options.append("선택 안 함 (실패로 처리)")
+                pick = st.radio(
+                    "선택",
+                    options=options,
+                    key=f"ambig_{idx}",
+                    label_visibility="collapsed",
+                )
+                if st.button("이걸로 결정", key=f"confirm_{idx}"):
+                    if pick == options[-1]:
+                        outcomes[outcomes.index(o)] = MatchOutcome(
+                            user_input=o.user_input,
+                            status="kobis_not_found",
+                            reason="사용자가 동명이작 중 선택 안 함",
+                        )
+                    else:
+                        chosen_idx = options.index(pick)
+                        chosen_kobis = o.kobis_candidates[chosen_idx]
+                        # admin 검색
+                        admin_client: AdminClient = st.session_state.admin_client
+                        try:
+                            admin_candidates = admin_client.search(chosen_kobis.title)
+                            admin_match = pick_admin_match(chosen_kobis, admin_candidates)
+                            outcomes[outcomes.index(o)] = build_outcome(
+                                o.user_input, chosen_kobis, admin_match
+                            )
+                        except Exception as exc:
+                            outcomes[outcomes.index(o)] = MatchOutcome(
+                                user_input=o.user_input,
+                                status="admin_not_found",
+                                reason=f"admin 오류: {exc}",
+                            )
+                    st.session_state.results = outcomes
+                    st.rerun()
+
+    # 매칭 실패
+    if failures:
+        st.divider()
+        st.subheader("❌ 매칭 실패")
+        for o in failures:
+            st.markdown(f"- **{o.user_input}** — {o.reason}")
+
+    # 성공 결과 표
+    st.divider()
+    st.subheader("✅ 매칭 성공 결과")
+    if not successes:
+        st.info("매칭 성공한 작품이 없습니다.")
+    else:
+        results = [o.result for o in successes]
+        df = pd.DataFrame(
+            [(r.id, r.code, r.title, r.release_date) for r in results],
+            columns=["id", "code", "title", "개봉일"],
+        )
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+        # 클립보드 복사 영역 (Streamlit의 st.code는 우상단에 복사 버튼 내장)
+        st.markdown("**📋 id / code / title 복사** (3컬럼)")
+        st.code(tsv_id_code_title(results), language=None)
+
+        st.markdown("**📋 개봉일만 복사** (1컬럼)")
+        st.code(tsv_release_date(results), language=None)
+
+        # 엑셀 다운로드
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        st.download_button(
+            label="💾 엑셀 파일 받기 (4컬럼)",
+            data=xlsx_bytes(results),
+            file_name=f"편성_매칭결과_{ts}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    # 새 작업 시작
+    st.divider()
+    if st.button("새 작품 리스트로 시작"):
         st.session_state.results = None
         st.rerun()
 
