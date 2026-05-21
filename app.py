@@ -159,7 +159,7 @@ def render_main_screen() -> None:
 
 
 def render_result_screen() -> None:
-    from excel import tsv_id_code_title, tsv_release_date, xlsx_bytes, MatchResult
+    from excel import xlsx_bytes, MatchResult
     from datetime import datetime
 
     outcomes = st.session_state.results
@@ -167,7 +167,8 @@ def render_result_screen() -> None:
     successes = [o for o in outcomes if o.status == "success"]
     kobis_ambiguous = [o for o in outcomes if o.status == "kobis_ambiguous"]
     admin_ambiguous = [o for o in outcomes if o.status == "admin_only_ambiguous"]
-    ambiguous = kobis_ambiguous + admin_ambiguous  # for the summary count
+    admin_uncertain = [o for o in outcomes if o.status == "admin_uncertain"]
+    ambiguous = kobis_ambiguous + admin_ambiguous + admin_uncertain  # for the summary count
     failures = [
         o for o in outcomes if o.status in ("kobis_not_found", "admin_not_found")
     ]
@@ -180,9 +181,9 @@ def render_result_screen() -> None:
     c4.metric("❌ 매칭 실패", len(failures))
 
     # 동명이작 선택 영역 (KOBIS + admin 통합)
-    if kobis_ambiguous or admin_ambiguous:
+    if kobis_ambiguous or admin_ambiguous or admin_uncertain:
         st.divider()
-        st.subheader("⚠️ 동명이작 선택이 필요한 작품")
+        st.subheader("⚠️ 선택이 필요한 작품")
         st.caption("후보 중 가장 유사한 항목이 기본 선택되어 있습니다. 확인 후 하단의 일괄 적용 버튼을 눌러주세요.")
 
         # KOBIS 동명이작
@@ -230,10 +231,40 @@ def render_result_screen() -> None:
                         label_visibility="collapsed",
                     )
 
+        # admin_uncertain (KOBIS 찾았으나 admin 자동 매칭 실패, 후보는 있음)
+        if admin_uncertain:
+            st.markdown("### 🔍 admin 자동 매칭 불확실 (직접 확인 필요)")
+            st.caption(
+                "KOBIS에서는 찾았지만 admin 검색 결과가 자동 매칭 기준에 정확히 일치하지 않습니다. "
+                "후보 중 직접 선택하세요. 개봉일은 KOBIS 값을 사용합니다."
+            )
+            for idx, o in enumerate(admin_uncertain):
+                sorted_candidates = sort_admin_by_similarity(o.user_input, o.admin_candidates)
+                options = list(sorted_candidates) + [None]
+                def _fmt_uncertain(opt):
+                    if opt is None:
+                        return "선택 안 함 (실패로 처리)"
+                    year = opt.year if opt.year else "?"
+                    return f"{opt.title} ({year}) — id={opt.id}, code={opt.code}"
+                with st.container(border=True):
+                    km = o.kobis_movie
+                    km_year = km.year if km and km.year else "?"
+                    st.markdown(
+                        f"**검색어**: {o.user_input}  ·  "
+                        f"**KOBIS**: {km.title if km else '?'} ({km_year})"
+                    )
+                    st.radio(
+                        "선택",
+                        options=options,
+                        format_func=_fmt_uncertain,
+                        key=f"uncertain_{idx}",
+                        label_visibility="collapsed",
+                    )
+
         # 일괄 적용 버튼
         st.divider()
         if st.button("✅ 선택한 항목 모두 적용", type="primary", use_container_width=True):
-            _apply_ambiguity_selections(kobis_ambiguous, admin_ambiguous, outcomes)
+            _apply_ambiguity_selections(kobis_ambiguous, admin_ambiguous, admin_uncertain, outcomes)
             st.session_state.results = outcomes
             st.rerun()
 
@@ -256,13 +287,6 @@ def render_result_screen() -> None:
             columns=["id", "code", "title", "개봉일"],
         )
         st.dataframe(df, use_container_width=True, hide_index=True)
-
-        # 클립보드 복사 영역 (Streamlit의 st.code는 우상단에 복사 버튼 내장)
-        st.markdown("**📋 id / code / title 복사** (3컬럼)")
-        st.code(tsv_id_code_title(results), language=None)
-
-        st.markdown("**📋 개봉일만 복사** (1컬럼)")
-        st.code(tsv_release_date(results), language=None)
 
         # 엑셀 다운로드
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
@@ -291,13 +315,14 @@ from matcher import (
 from excel import MatchResult
 
 
-def _apply_ambiguity_selections(kobis_ambiguous, admin_ambiguous, outcomes):
+def _apply_ambiguity_selections(kobis_ambiguous, admin_ambiguous, admin_uncertain, outcomes):
     """라디오 선택을 일괄로 outcomes에 반영.
 
-    - KOBIS 동명이작 선택은 admin 재검색이 필요하므로 AdminClient 1개로 한꺼번에 처리
-    - admin-only 동명이작은 admin 호출 없이 데이터 변환만
+    - admin_only_ambiguous: KOBIS 0건 → admin 단순 선택, release_date 빈 칸
+    - admin_uncertain: KOBIS 있음 → admin 선택 + KOBIS release_date 사용
+    - kobis_ambiguous: KOBIS 다건 → admin 재검색 필요 (AdminClient 1회 세션)
     """
-    # admin-only first (no network needed)
+    # admin_only_ambiguous (network 불필요)
     for idx, o in enumerate(admin_ambiguous):
         pick = st.session_state.get(f"admin_ambig_{idx}")
         outcome_idx = outcomes.index(o)
@@ -320,7 +345,31 @@ def _apply_ambiguity_selections(kobis_ambiguous, admin_ambiguous, outcomes):
                 reason="사용자가 admin 후보 중 선택 (개봉일 미상)",
             )
 
-    # KOBIS ambiguous needs fresh admin session
+    # admin_uncertain (network 불필요, KOBIS release_date 사용)
+    for idx, o in enumerate(admin_uncertain):
+        pick = st.session_state.get(f"uncertain_{idx}")
+        outcome_idx = outcomes.index(o)
+        if pick is None:
+            outcomes[outcome_idx] = MatchOutcome(
+                user_input=o.user_input,
+                status="admin_not_found",
+                reason="사용자가 admin 후보 중 선택 안 함",
+            )
+        else:
+            km = o.kobis_movie
+            outcomes[outcome_idx] = MatchOutcome(
+                user_input=o.user_input,
+                status="success",
+                result=MatchResult(
+                    id=pick.id,
+                    code=pick.code,
+                    title=km.title if km else pick.title,
+                    release_date=km.release_date if km else "",
+                ),
+                reason="사용자가 admin 후보 중 직접 선택",
+            )
+
+    # KOBIS ambiguous (network 필요)
     if not kobis_ambiguous:
         return
 
@@ -359,7 +408,19 @@ def _apply_ambiguity_selections(kobis_ambiguous, admin_ambiguous, outcomes):
                 try:
                     admin_candidates = ad_client.search(pick.title)
                     admin_match = pick_admin_match(pick, admin_candidates)
-                    outcomes[outcome_idx] = build_outcome(o.user_input, pick, admin_match)
+                    if admin_match is not None:
+                        outcomes[outcome_idx] = build_outcome(o.user_input, pick, admin_match)
+                    elif 1 <= len(admin_candidates) <= 5:
+                        # 사용자가 다시 한번 더 골라야 할 수도 있지만, 일괄 적용 흐름에서는
+                        # 자동 매칭 실패 → admin_not_found로 처리 (다음 라운드에서 확인)
+                        outcomes[outcome_idx] = MatchOutcome(
+                            user_input=o.user_input,
+                            status="admin_uncertain",
+                            admin_candidates=admin_candidates,
+                            kobis_movie=pick,
+                        )
+                    else:
+                        outcomes[outcome_idx] = build_outcome(o.user_input, pick, None)
                 except Exception as exc:
                     outcomes[outcome_idx] = MatchOutcome(
                         user_input=o.user_input,
@@ -498,7 +559,21 @@ def run_matching(titles: list) -> list:
                 continue
 
             admin_match = pick_admin_match(kobis_movie, admin_candidates)
-            outcomes.append(build_outcome(title, kobis_movie, admin_match))
+            if admin_match is not None:
+                outcomes.append(build_outcome(title, kobis_movie, admin_match))
+            elif 1 <= len(admin_candidates) <= 5:
+                # 엄격 매칭 실패했지만 admin 후보가 적당 → 사용자가 확인/선택
+                outcomes.append(
+                    MatchOutcome(
+                        user_input=title,
+                        status="admin_uncertain",
+                        admin_candidates=admin_candidates,
+                        kobis_movie=kobis_movie,
+                    )
+                )
+            else:
+                # 후보 0건 또는 너무 많음 (기본 목록 추정) → 실패 처리
+                outcomes.append(build_outcome(title, kobis_movie, None))
             progress_bar.progress(i / total)
 
         status_text.text("완료")

@@ -152,3 +152,59 @@ def test_sort_handles_empty_query():
     ]
     result = sort_kobis_by_similarity("", candidates)
     assert len(result) == 1
+
+
+def test_pick_admin_match_year_off_by_one_with_title_match():
+    """KOBIS year=2013, admin year=2012, title 일치 → 매칭."""
+    from kobis import Movie
+    k = Movie(
+        code="c",
+        title="공정사회",
+        release_date="2013-03-21",
+        directors=[],
+        genres=[],
+    )
+    candidates = [admin(id="1", title="공정사회", year=2012)]
+    chosen = pick_admin_match(k, candidates)
+    assert chosen is not None
+    assert chosen.id == "1"
+
+
+def test_pick_admin_match_year_off_by_two_rejected():
+    """year 차이가 2 이상이면 매칭 안 함."""
+    from kobis import Movie
+    k = Movie(
+        code="c",
+        title="공정사회",
+        release_date="2013-03-21",
+        directors=[],
+        genres=[],
+    )
+    candidates = [admin(id="1", title="공정사회", year=2010)]
+    chosen = pick_admin_match(k, candidates)
+    assert chosen is None
+
+
+def test_pick_admin_match_prefers_exact_year_over_loose():
+    """year 정확 일치가 ±1보다 우선."""
+    from kobis import Movie
+    k = Movie(
+        code="c",
+        title="공정사회",
+        release_date="2013-03-21",
+        directors=[],
+        genres=[],
+    )
+    candidates = [
+        admin(id="loose", title="공정사회", year=2012),
+        admin(id="exact", title="공정사회", year=2013),
+    ]
+    chosen = pick_admin_match(k, candidates)
+    assert chosen.id == "exact"
+
+
+def test_normalize_strips_punctuation():
+    """문장부호 차이도 정규화 후 무시."""
+    from matcher import _normalize
+    assert _normalize("섬. 사라진 사람들") == _normalize("섬, 사라진 사람들")
+    assert _normalize("U.S. Movie") == _normalize("US Movie")

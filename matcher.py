@@ -23,13 +23,16 @@ class MatchOutcome:
       - "kobis_not_found": KOBIS와 admin 모두에서 찾지 못함
       - "admin_not_found": KOBIS는 찾았으나 admin에서 못 찾음
       - "kobis_ambiguous": KOBIS 결과가 여러 건이라 사용자 선택 필요
-      - "admin_only_ambiguous": KOBIS 0건이지만 admin이 여러 건 반환, 사용자 선택 필요
+      - "admin_only_ambiguous": KOBIS 0건, admin 1~5건이라 사용자가 선택 (개봉일 빈 칸)
+      - "admin_uncertain": KOBIS는 찾았으나 admin이 자동 매칭 못 함, admin 후보가
+                          소수 존재하여 사용자가 직접 확인/선택 (개봉일은 KOBIS 값 사용)
     """
     user_input: str
     status: str
     result: Optional[MatchResult] = None
     kobis_candidates: Optional[List[Movie]] = None
     admin_candidates: Optional[List[AdminMatch]] = None
+    kobis_movie: Optional[Movie] = None  # admin_uncertain일 때 매칭에 사용할 KOBIS 정보
     reason: str = ""
 
 
@@ -38,49 +41,71 @@ def pick_admin_match(
 ) -> Optional[AdminMatch]:
     """admin 후보 중 KOBIS와 일치하는 항목 선택.
 
-    매칭 규칙:
-      1. year가 KOBIS year와 동일한 후보만 남김
-      2. 그 중 title이 KOBIS title 또는 title_en과 (대소문자 무시 후) 일치하는 게 있으면 그것
-      3. 일치 없으면 (대소문자 무시 후) 부분 포함 — KOBIS title 또는 title_en이
-         admin title에 포함되거나 그 반대인 첫 후보
-      4. 위 어느 조건도 만족 못 하면 None (admin이 무관한 결과를 반환했을 가능성)
+    매칭 우선순위 (위에서 아래로 시도, 첫 매치 반환):
+      1. year 정확 일치 + title (정규화 후) 정확 일치
+      2. year 정확 일치 + title 부분 포함
+      3. year ±1 일치 + title 정확 일치
+      4. year ±1 일치 + title 부분 포함
+    위 어느 조건도 만족 못 하면 None.
 
-    예외: KOBIS year가 None이면 candidates의 첫 후보 반환 (정보 부족).
+    예외:
+      - candidates가 비어 있으면 None
+      - kobis_movie.year가 None이면 candidates 첫 항목 반환 (정보 부족)
+      - KOBIS의 title/title_en이 모두 비어 있으면 year만으로 첫 후보 선택
     """
     if not candidates:
         return None
     if kobis_movie.year is None:
         return candidates[0]
 
-    same_year = [c for c in candidates if c.year == kobis_movie.year]
-    if not same_year:
-        return None
-
     kobis_titles = _normalize_title_set(kobis_movie)
     if not kobis_titles:
-        # KOBIS title 정보가 모두 비어있으면 year만 일치하는 첫 후보 (드문 케이스)
-        return same_year[0]
+        same_year = [c for c in candidates if c.year == kobis_movie.year]
+        return same_year[0] if same_year else None
 
-    # 1차: exact match (정규화 후)
-    for c in same_year:
-        if _normalize(c.title) in kobis_titles:
-            return c
+    target = kobis_movie.year
 
-    # 2차: 부분 포함 match (한쪽이 다른 쪽에 포함)
-    for c in same_year:
+    def _title_exact(c: AdminMatch) -> bool:
+        return _normalize(c.title) in kobis_titles
+
+    def _title_contains(c: AdminMatch) -> bool:
         admin_norm = _normalize(c.title)
         for kt in kobis_titles:
-            if admin_norm and kt and (kt in admin_norm or admin_norm in kt):
-                return c
+            if kt and admin_norm and (kt in admin_norm or admin_norm in kt):
+                return True
+        return False
 
-    # 3차: title 관련성 부족 → admin이 무관한 기본 목록을 반환한 경우로 추정
+    # Tier 1: year exact + title exact
+    for c in candidates:
+        if c.year == target and _title_exact(c):
+            return c
+
+    # Tier 2: year exact + title contains
+    for c in candidates:
+        if c.year == target and _title_contains(c):
+            return c
+
+    # Tier 3: year ±1 + title exact
+    for c in candidates:
+        if c.year is not None and abs(c.year - target) == 1 and _title_exact(c):
+            return c
+
+    # Tier 4: year ±1 + title contains
+    for c in candidates:
+        if c.year is not None and abs(c.year - target) == 1 and _title_contains(c):
+            return c
+
     return None
 
 
 def _normalize(text: str) -> str:
-    """제목 비교용 정규화: lower + 모든 공백 제거."""
+    """제목 비교용 정규화: lower + 공백/문장부호 제거.
+
+    '\\W'는 Python re 모듈에서 word 문자가 아닌 것(공백, 문장부호, 기호 등)을 의미한다.
+    한글은 word 문자에 포함되므로 보존된다. 영문 알파벳/숫자도 보존.
+    """
     import re
-    return re.sub(r"\s+", "", text.lower())
+    return re.sub(r"[\W_]+", "", text.lower())
 
 
 def _normalize_title_set(kobis_movie: Movie) -> set:
