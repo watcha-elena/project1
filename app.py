@@ -164,6 +164,13 @@ def render_result_screen() -> None:
 
     outcomes = st.session_state.results
 
+    # 상단 '새 작품 리스트로 시작' 버튼 (페이지 위쪽에서 빠르게 입력 화면 복귀)
+    top_back_col, _ = st.columns([2, 8])
+    with top_back_col:
+        if st.button("← 새 작품 리스트로 시작", key="back_to_input_top"):
+            st.session_state.results = None
+            st.rerun()
+
     successes = [o for o in outcomes if o.status == "success"]
     kobis_ambiguous = [o for o in outcomes if o.status == "kobis_ambiguous"]
     admin_ambiguous = [o for o in outcomes if o.status == "admin_only_ambiguous"]
@@ -297,7 +304,7 @@ def render_result_screen() -> None:
 
     # 새 작업 시작
     st.divider()
-    if st.button("새 작품 리스트로 시작"):
+    if st.button("새 작품 리스트로 시작", key="back_to_input_bottom"):
         st.session_state.results = None
         st.rerun()
 
