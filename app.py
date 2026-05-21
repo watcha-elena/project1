@@ -1,13 +1,63 @@
-"""편성 자동화 대시보드 Streamlit 진입점."""
+"""편성작 검색기 Streamlit 진입점."""
 import streamlit as st
 
 from admin import AdminClient
 from auth import LoginRateLimiter
+from streamlit_cookies_manager import EncryptedCookieManager
 import pandas as pd
 
+from persist import (
+    COOKIE_KEY,
+    COOKIE_PREFIX,
+    pack_credentials,
+    unpack_credentials,
+)
 
-PAGE_TITLE = "편성 자동화 대시보드"
+
+PAGE_TITLE = "편성작 검색기"
 MAX_TITLES = 100
+
+
+def _get_cookie_manager() -> EncryptedCookieManager:
+    """EncryptedCookieManager 인스턴스는 세션 단위로 1개 유지."""
+    if "cookie_manager" not in st.session_state:
+        st.session_state.cookie_manager = EncryptedCookieManager(
+            prefix=COOKIE_PREFIX,
+            password=st.secrets["COOKIE_FERNET_KEY"],
+        )
+    return st.session_state.cookie_manager
+
+
+def restore_session_from_cookies() -> None:
+    """쿠키가 준비된 경우 자격증명 복원. 준비 안 된 경우 그냥 return.
+
+    st.stop()을 쓰지 않는다 — 빈 화면 방지가 목적.
+    쿠키가 아직 로드되지 않았다면 일단 로그인 화면이 렌더되고,
+    컴포넌트가 다음 rerun을 트리거하면 그때 복원된다.
+    """
+    if st.session_state.get("logged_in"):
+        return
+
+    cookies = _get_cookie_manager()
+    if not cookies.ready():
+        # 쿠키 아직 미로드 — 다음 rerun에서 다시 시도
+        return
+
+    token = cookies.get(COOKIE_KEY)
+    if not token:
+        return
+
+    restored = unpack_credentials(token)
+    if restored:
+        st.session_state.admin_email = restored[0]
+        st.session_state.admin_password = restored[1]
+        st.session_state.logged_in = True
+        st.rerun()
+    else:
+        # 만료/파손 쿠키 정리
+        if COOKIE_KEY in cookies:
+            del cookies[COOKIE_KEY]
+            cookies.save()
 
 
 def init_session_state() -> None:
@@ -27,7 +77,7 @@ def init_session_state() -> None:
 
 
 def render_login_screen() -> None:
-    st.title(f"📺 {PAGE_TITLE}")
+    st.title(f"🔍 {PAGE_TITLE}")
     st.caption("사내 admin 계정으로 로그인하세요.")
 
     limiter: LoginRateLimiter = st.session_state.rate_limiter
@@ -64,10 +114,14 @@ def render_login_screen() -> None:
                 test_client.stop()
         if ok:
             limiter.record_success()
-            # 자격증명만 메모리에 보관. 매칭 실행 시마다 새 브라우저로 재로그인.
             st.session_state.admin_email = email
             st.session_state.admin_password = password
             st.session_state.logged_in = True
+            # 쿠키 저장 (준비된 경우에만)
+            cookies = _get_cookie_manager()
+            if cookies.ready():
+                cookies[COOKIE_KEY] = pack_credentials(email, password)
+                cookies.save()
             st.rerun()
         else:
             limiter.record_failure()
@@ -82,10 +136,14 @@ def render_login_screen() -> None:
 
 
 def render_main_screen() -> None:
-    st.title(f"📺 {PAGE_TITLE}")
+    st.title(f"🔍 {PAGE_TITLE}")
     col1, col2 = st.columns([4, 1])
     with col2:
         if st.button("로그아웃", use_container_width=True):
+            cookies = _get_cookie_manager()
+            if cookies.ready() and COOKIE_KEY in cookies:
+                del cookies[COOKIE_KEY]
+                cookies.save()
             st.session_state.admin_email = None
             st.session_state.admin_password = None
             st.session_state.logged_in = False
@@ -644,7 +702,7 @@ def run_matching(titles: list) -> list:
 
 
 def main() -> None:
-    st.set_page_config(page_title=PAGE_TITLE, page_icon="📺", layout="wide")
+    st.set_page_config(page_title=PAGE_TITLE, page_icon="🔍", layout="wide")
     st.markdown(
         """
         <style>
@@ -670,6 +728,7 @@ def main() -> None:
         unsafe_allow_html=True,
     )
     init_session_state()
+    restore_session_from_cookies()
 
     if st.session_state.logged_in:
         render_main_screen()

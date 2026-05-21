@@ -1,4 +1,4 @@
-# 편성 자동화 대시보드
+# 편성작 검색기
 
 OTT 플랫폼 개별구매 타이틀 편성 담당자를 위한 자동 매칭 대시보드.
 작품명 리스트만 입력하면 KOBIS 개봉일과 사내 admin의 id/code를 자동으로 가져와 결과 표로 정리한다.
@@ -57,7 +57,15 @@ ADMIN_EMAIL="..." ADMIN_PW="..." python scripts/manual_test_admin_search.py "어
 4. Secrets에 추가:
    ```toml
    KOBIS_API_KEY = "<발급받은 키>"
+   COOKIE_FERNET_KEY = "<로컬 secrets.toml과 동일한 키>"
    ```
+
+   `COOKIE_FERNET_KEY`는 로그인 쿠키 암호화용 키입니다. 한 번 생성:
+   ```bash
+   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+   키를 바꾸면 기존 로그인 쿠키가 모두 무효화됩니다.
+
 5. Deploy
 
 이후 git push만 하면 자동 재배포.
