@@ -339,6 +339,30 @@ def run_matching(titles: list) -> list:
 
 def main() -> None:
     st.set_page_config(page_title=PAGE_TITLE, page_icon="📺", layout="wide")
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            max-width: 1100px;
+            padding-top: 2rem;
+        }
+        button[kind="primary"] {
+            border-radius: 8px;
+            font-weight: 600;
+        }
+        .stMetric {
+            background-color: #FAFAFA;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #EEE;
+        }
+        h1, h2, h3 {
+            letter-spacing: -0.02em;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     init_session_state()
 
     if st.session_state.logged_in:
