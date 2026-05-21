@@ -14,8 +14,10 @@ def init_session_state() -> None:
     """세션 상태 초기화 (한 번만)."""
     if "rate_limiter" not in st.session_state:
         st.session_state.rate_limiter = LoginRateLimiter()
-    if "admin_client" not in st.session_state:
-        st.session_state.admin_client = None
+    if "admin_email" not in st.session_state:
+        st.session_state.admin_email = None
+    if "admin_password" not in st.session_state:
+        st.session_state.admin_password = None
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
     if "results" not in st.session_state:
@@ -50,22 +52,24 @@ def render_login_screen() -> None:
             st.warning("email과 password를 모두 입력하세요.")
             return
         with st.spinner("admin 로그인 중..."):
-            client = AdminClient()
-            client.start()
+            test_client = AdminClient()
+            test_client.start()
             try:
-                ok = client.login(email, password)
+                ok = test_client.login(email, password)
             except Exception as exc:
-                client.stop()
                 limiter.record_failure()
                 st.error(f"로그인 중 오류: {exc}")
                 return
+            finally:
+                test_client.stop()
         if ok:
             limiter.record_success()
-            st.session_state.admin_client = client
+            # 자격증명만 메모리에 보관. 매칭 실행 시마다 새 브라우저로 재로그인.
+            st.session_state.admin_email = email
+            st.session_state.admin_password = password
             st.session_state.logged_in = True
             st.rerun()
         else:
-            client.stop()
             limiter.record_failure()
             remaining_attempts = limiter.remaining_attempts
             if remaining_attempts > 0:
@@ -82,11 +86,11 @@ def render_main_screen() -> None:
     col1, col2 = st.columns([4, 1])
     with col2:
         if st.button("로그아웃", use_container_width=True):
-            if st.session_state.admin_client:
-                st.session_state.admin_client.stop()
-            st.session_state.admin_client = None
+            st.session_state.admin_email = None
+            st.session_state.admin_password = None
             st.session_state.logged_in = False
             st.session_state.results = None
+            st.session_state.pending_titles = None
             st.rerun()
 
     if st.session_state.pending_titles is not None:
@@ -203,20 +207,32 @@ def render_result_screen() -> None:
                     else:
                         chosen_idx = options.index(pick)
                         chosen_kobis = o.kobis_candidates[chosen_idx]
-                        # admin 검색
-                        admin_client: AdminClient = st.session_state.admin_client
+                        # admin 검색 (새 브라우저 세션 생성)
+                        email = st.session_state.admin_email
+                        password = st.session_state.admin_password
+                        ad_client = AdminClient()
                         try:
-                            admin_candidates = admin_client.search(chosen_kobis.title)
-                            admin_match = pick_admin_match(chosen_kobis, admin_candidates)
-                            outcomes[outcomes.index(o)] = build_outcome(
-                                o.user_input, chosen_kobis, admin_match
-                            )
+                            ad_client.start()
+                            if not ad_client.login(email, password):
+                                outcomes[outcomes.index(o)] = MatchOutcome(
+                                    user_input=o.user_input,
+                                    status="admin_not_found",
+                                    reason="admin 재로그인 실패",
+                                )
+                            else:
+                                admin_candidates = ad_client.search(chosen_kobis.title)
+                                admin_match = pick_admin_match(chosen_kobis, admin_candidates)
+                                outcomes[outcomes.index(o)] = build_outcome(
+                                    o.user_input, chosen_kobis, admin_match
+                                )
                         except Exception as exc:
                             outcomes[outcomes.index(o)] = MatchOutcome(
                                 user_input=o.user_input,
                                 status="admin_not_found",
                                 reason=f"admin 오류: {exc}",
                             )
+                        finally:
+                            ad_client.stop()
                     st.session_state.results = outcomes
                     st.rerun()
 
@@ -270,70 +286,84 @@ from matcher import MatchOutcome, build_outcome, pick_admin_match
 def run_matching(titles: list) -> list:
     """모든 작품에 대해 KOBIS + admin 매칭을 순차 실행.
 
+    매번 새 AdminClient를 생성하고 로그인한 후 모든 작품을 처리.
     중간에 한 작품이 실패해도 다음 작품은 계속 처리.
     """
     api_key = st.secrets["KOBIS_API_KEY"]
-    admin_client: AdminClient = st.session_state.admin_client
+    email = st.session_state.admin_email
+    password = st.session_state.admin_password
 
     progress_bar = st.progress(0.0)
     status_text = st.empty()
     outcomes: list = []
 
-    total = len(titles)
-    for i, title in enumerate(titles, start=1):
-        status_text.text(f"[{i}/{total}] {title} 처리 중...")
+    admin_client = AdminClient()
+    admin_client.start()
+    try:
+        # admin 재로그인 (매칭 세션마다 새 브라우저)
+        status_text.text("admin에 로그인 중...")
+        if not admin_client.login(email, password):
+            st.error("admin 로그인에 실패했습니다. 로그아웃 후 다시 시도해주세요.")
+            return []
 
-        # KOBIS
-        try:
-            kobis_results = search_movies_with_fallback(title, api_key)
-        except Exception as exc:
-            outcomes.append(
-                MatchOutcome(
-                    user_input=title,
-                    status="kobis_not_found",
-                    reason=f"KOBIS 오류: {exc}",
+        total = len(titles)
+        for i, title in enumerate(titles, start=1):
+            status_text.text(f"[{i}/{total}] {title} 처리 중...")
+
+            # KOBIS
+            try:
+                kobis_results = search_movies_with_fallback(title, api_key)
+            except Exception as exc:
+                outcomes.append(
+                    MatchOutcome(
+                        user_input=title,
+                        status="kobis_not_found",
+                        reason=f"KOBIS 오류: {exc}",
+                    )
                 )
-            )
-            progress_bar.progress(i / total)
-            continue
+                progress_bar.progress(i / total)
+                continue
 
-        if not kobis_results:
-            outcomes.append(build_outcome(title, None, None))
-            progress_bar.progress(i / total)
-            continue
+            if not kobis_results:
+                outcomes.append(build_outcome(title, None, None))
+                progress_bar.progress(i / total)
+                continue
 
-        if len(kobis_results) > 1:
-            outcomes.append(
-                MatchOutcome(
-                    user_input=title,
-                    status="kobis_ambiguous",
-                    kobis_candidates=kobis_results,
+            if len(kobis_results) > 1:
+                outcomes.append(
+                    MatchOutcome(
+                        user_input=title,
+                        status="kobis_ambiguous",
+                        kobis_candidates=kobis_results,
+                    )
                 )
-            )
-            progress_bar.progress(i / total)
-            continue
+                progress_bar.progress(i / total)
+                continue
 
-        kobis_movie = kobis_results[0]
+            kobis_movie = kobis_results[0]
 
-        # admin
-        try:
-            admin_candidates = admin_client.search(kobis_movie.title)
-        except Exception as exc:
-            outcomes.append(
-                MatchOutcome(
-                    user_input=title,
-                    status="admin_not_found",
-                    reason=f"admin 오류: {exc}",
+            # admin
+            try:
+                admin_candidates = admin_client.search(kobis_movie.title)
+            except Exception as exc:
+                outcomes.append(
+                    MatchOutcome(
+                        user_input=title,
+                        status="admin_not_found",
+                        reason=f"admin 오류: {exc}",
+                    )
                 )
-            )
+                progress_bar.progress(i / total)
+                continue
+
+            admin_match = pick_admin_match(kobis_movie, admin_candidates)
+            outcomes.append(build_outcome(title, kobis_movie, admin_match))
             progress_bar.progress(i / total)
-            continue
 
-        admin_match = pick_admin_match(kobis_movie, admin_candidates)
-        outcomes.append(build_outcome(title, kobis_movie, admin_match))
-        progress_bar.progress(i / total)
+        status_text.text("완료")
+    finally:
+        admin_client.stop()
 
-    status_text.text("완료")
     return outcomes
 
 
