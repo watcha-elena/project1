@@ -92,6 +92,57 @@ def _normalize_title_set(kobis_movie: Movie) -> set:
     return {t for t in titles if t}
 
 
+def sort_kobis_by_similarity(query: str, candidates: List[Movie]) -> List[Movie]:
+    """KOBIS 후보를 검색어 유사도 순으로 정렬.
+
+    우선순위:
+      0 — title 또는 title_en 정확 일치 (대소문자/공백 정규화 후)
+      1 — title이 검색어로 시작
+      2 — 검색어가 title에 포함됨 (또는 title이 검색어에 포함됨)
+      3 — 그 외 (KOBIS가 반환한 순서대로)
+    같은 등급 내에서는 최신 작품 (year 큰 것) 먼저.
+    """
+    q = _normalize(query)
+    if not q:
+        return list(candidates)
+
+    def rank(m: Movie):
+        title_norm = _normalize(m.title)
+        title_en_norm = _normalize(m.title_en)
+        if title_norm == q or title_en_norm == q:
+            tier = 0
+        elif title_norm.startswith(q) or title_en_norm.startswith(q):
+            tier = 1
+        elif q in title_norm or q in title_en_norm or title_norm in q or title_en_norm in q:
+            tier = 2
+        else:
+            tier = 3
+        return (tier, -(m.year or 0))
+
+    return sorted(candidates, key=rank)
+
+
+def sort_admin_by_similarity(query: str, candidates: List[AdminMatch]) -> List[AdminMatch]:
+    """admin 후보를 검색어 유사도 순으로 정렬. KOBIS와 동일한 규칙."""
+    q = _normalize(query)
+    if not q:
+        return list(candidates)
+
+    def rank(a: AdminMatch):
+        title_norm = _normalize(a.title)
+        if title_norm == q:
+            tier = 0
+        elif title_norm.startswith(q):
+            tier = 1
+        elif q in title_norm or title_norm in q:
+            tier = 2
+        else:
+            tier = 3
+        return (tier, -(a.year or 0))
+
+    return sorted(candidates, key=rank)
+
+
 def build_outcome(
     user_input: str,
     kobis_movie: Optional[Movie],

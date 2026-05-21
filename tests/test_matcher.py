@@ -1,5 +1,5 @@
 from kobis import Movie
-from matcher import AdminMatch, pick_admin_match, build_outcome
+from matcher import AdminMatch, pick_admin_match, build_outcome, sort_kobis_by_similarity, sort_admin_by_similarity
 
 
 def admin(id="1", code="A", title="t", year=2020):
@@ -108,3 +108,47 @@ def test_pick_admin_match_partial_contains():
     candidates = [admin(id="1", title="Avatar: The Way of Water", year=2022)]
     chosen = pick_admin_match(k, candidates)
     assert chosen.id == "1"
+
+
+def test_sort_kobis_exact_match_first():
+    from kobis import Movie
+    candidates = [
+        Movie(code="1", title="알라딘과 죽음의 램프", release_date="2012-01-01", directors=[], genres=[]),
+        Movie(code="2", title="알라딘", release_date="2019-05-23", directors=[], genres=[]),
+        Movie(code="3", title="저예산 알라딘", release_date="2020-01-01", directors=[], genres=[]),
+    ]
+    sorted_list = sort_kobis_by_similarity("알라딘", candidates)
+    assert sorted_list[0].code == "2"  # exact match
+    assert sorted_list[1].code == "1"  # starts with
+    assert sorted_list[2].code == "3"  # contains
+
+
+def test_sort_kobis_newest_first_within_same_tier():
+    from kobis import Movie
+    candidates = [
+        Movie(code="old", title="알라딘", release_date="1992-01-01", directors=[], genres=[]),
+        Movie(code="new", title="알라딘", release_date="2019-05-23", directors=[], genres=[]),
+    ]
+    sorted_list = sort_kobis_by_similarity("알라딘", candidates)
+    assert sorted_list[0].code == "new"  # 2019 first
+
+
+def test_sort_admin_by_similarity():
+    candidates = [
+        AdminMatch(id="1", code="a", title="알라딘 외 다수의 모험", year=2010),
+        AdminMatch(id="2", code="b", title="알라딘", year=2019),
+        AdminMatch(id="3", code="c", title="Random Movie", year=2020),
+    ]
+    sorted_list = sort_admin_by_similarity("알라딘", candidates)
+    assert sorted_list[0].id == "2"  # exact match
+    assert sorted_list[1].id == "1"  # starts with
+    assert sorted_list[2].id == "3"  # no relation, last
+
+
+def test_sort_handles_empty_query():
+    from kobis import Movie
+    candidates = [
+        Movie(code="1", title="아무거나", release_date="2020-01-01", directors=[], genres=[]),
+    ]
+    result = sort_kobis_by_similarity("", candidates)
+    assert len(result) == 1

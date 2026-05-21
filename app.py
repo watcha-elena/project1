@@ -179,108 +179,63 @@ def render_result_screen() -> None:
     c3.metric("⚠️ 동명이작 선택", len(ambiguous))
     c4.metric("❌ 매칭 실패", len(failures))
 
-    # KOBIS 동명이작 선택
-    if kobis_ambiguous:
+    # 동명이작 선택 영역 (KOBIS + admin 통합)
+    if kobis_ambiguous or admin_ambiguous:
         st.divider()
-        st.subheader("⚠️ 동명이작 선택이 필요한 작품 (KOBIS)")
-        for idx, o in enumerate(kobis_ambiguous):
-            with st.container(border=True):
-                st.markdown(f"**검색어**: {o.user_input}")
-                options = []
-                for c in o.kobis_candidates:
-                    year = c.year if c.year else "?"
-                    directors = ", ".join(c.directors) if c.directors else "감독 정보 없음"
-                    genres = ", ".join(c.genres) if c.genres else "장르 정보 없음"
-                    options.append(
-                        f"{c.title} ({year}) — {directors}, {genres}"
-                    )
-                options.append("선택 안 함 (실패로 처리)")
-                pick = st.radio(
-                    "선택",
-                    options=options,
-                    key=f"kobis_ambig_{idx}",
-                    label_visibility="collapsed",
-                )
-                if st.button("이걸로 결정", key=f"kobis_confirm_{idx}"):
-                    if pick == options[-1]:
-                        outcomes[outcomes.index(o)] = MatchOutcome(
-                            user_input=o.user_input,
-                            status="kobis_not_found",
-                            reason="사용자가 동명이작 중 선택 안 함",
-                        )
-                    else:
-                        chosen_idx = options.index(pick)
-                        chosen_kobis = o.kobis_candidates[chosen_idx]
-                        email = st.session_state.admin_email
-                        password = st.session_state.admin_password
-                        ad_client = AdminClient()
-                        try:
-                            ad_client.start()
-                            if not ad_client.login(email, password):
-                                outcomes[outcomes.index(o)] = MatchOutcome(
-                                    user_input=o.user_input,
-                                    status="admin_not_found",
-                                    reason="admin 재로그인 실패",
-                                )
-                            else:
-                                admin_candidates = ad_client.search(chosen_kobis.title)
-                                admin_match = pick_admin_match(chosen_kobis, admin_candidates)
-                                outcomes[outcomes.index(o)] = build_outcome(
-                                    o.user_input, chosen_kobis, admin_match
-                                )
-                        except Exception as exc:
-                            outcomes[outcomes.index(o)] = MatchOutcome(
-                                user_input=o.user_input,
-                                status="admin_not_found",
-                                reason=f"admin 오류: {exc}",
-                            )
-                        finally:
-                            ad_client.stop()
-                    st.session_state.results = outcomes
-                    st.rerun()
+        st.subheader("⚠️ 동명이작 선택이 필요한 작품")
+        st.caption("후보 중 가장 유사한 항목이 기본 선택되어 있습니다. 확인 후 하단의 일괄 적용 버튼을 눌러주세요.")
 
-    # admin-only 동명이작 선택 (KOBIS 없음 + admin 다건)
-    if admin_ambiguous:
+        # KOBIS 동명이작
+        if kobis_ambiguous:
+            st.markdown("### 📡 KOBIS 동명이작")
+            for idx, o in enumerate(kobis_ambiguous):
+                sorted_candidates = sort_kobis_by_similarity(o.user_input, o.kobis_candidates)
+                # 선택지: sorted candidates + None (실패로 처리)
+                options = list(sorted_candidates) + [None]
+                def _fmt_kobis(opt, _o=o):
+                    if opt is None:
+                        return "선택 안 함 (실패로 처리)"
+                    year = opt.year if opt.year else "?"
+                    directors = ", ".join(opt.directors) if opt.directors else "감독 정보 없음"
+                    genres = ", ".join(opt.genres) if opt.genres else "장르 정보 없음"
+                    return f"{opt.title} ({year}) — {directors}, {genres}"
+                with st.container(border=True):
+                    st.markdown(f"**검색어**: {o.user_input}")
+                    st.radio(
+                        "선택",
+                        options=options,
+                        format_func=_fmt_kobis,
+                        key=f"kobis_ambig_{idx}",
+                        label_visibility="collapsed",
+                    )
+
+        # admin-only 동명이작
+        if admin_ambiguous:
+            st.markdown("### 🗂️ admin 동명이작 (KOBIS 없음, 개봉일 빈 칸)")
+            for idx, o in enumerate(admin_ambiguous):
+                sorted_candidates = sort_admin_by_similarity(o.user_input, o.admin_candidates)
+                options = list(sorted_candidates) + [None]
+                def _fmt_admin(opt):
+                    if opt is None:
+                        return "선택 안 함 (실패로 처리)"
+                    year = opt.year if opt.year else "?"
+                    return f"{opt.title} ({year}) — id={opt.id}, code={opt.code}"
+                with st.container(border=True):
+                    st.markdown(f"**검색어**: {o.user_input}")
+                    st.radio(
+                        "선택",
+                        options=options,
+                        format_func=_fmt_admin,
+                        key=f"admin_ambig_{idx}",
+                        label_visibility="collapsed",
+                    )
+
+        # 일괄 적용 버튼
         st.divider()
-        st.subheader("⚠️ 동명이작 선택이 필요한 작품 (admin)")
-        st.caption("KOBIS에서는 찾지 못했으나 admin에 여러 건 있는 작품입니다. 개봉일은 빈 칸으로 채워집니다.")
-        for idx, o in enumerate(admin_ambiguous):
-            with st.container(border=True):
-                st.markdown(f"**검색어**: {o.user_input}")
-                options = []
-                for c in o.admin_candidates:
-                    year = c.year if c.year else "?"
-                    options.append(f"{c.title} ({year}) — id={c.id}, code={c.code}")
-                options.append("선택 안 함 (실패로 처리)")
-                pick = st.radio(
-                    "선택",
-                    options=options,
-                    key=f"admin_ambig_{idx}",
-                    label_visibility="collapsed",
-                )
-                if st.button("이걸로 결정", key=f"admin_confirm_{idx}"):
-                    if pick == options[-1]:
-                        outcomes[outcomes.index(o)] = MatchOutcome(
-                            user_input=o.user_input,
-                            status="kobis_not_found",
-                            reason="사용자가 admin 결과 중 선택 안 함",
-                        )
-                    else:
-                        chosen_idx = options.index(pick)
-                        chosen = o.admin_candidates[chosen_idx]
-                        outcomes[outcomes.index(o)] = MatchOutcome(
-                            user_input=o.user_input,
-                            status="success",
-                            result=MatchResult(
-                                id=chosen.id,
-                                code=chosen.code,
-                                title=chosen.title,
-                                release_date="",
-                            ),
-                            reason="사용자가 admin 후보 중 선택 (개봉일 미상)",
-                        )
-                    st.session_state.results = outcomes
-                    st.rerun()
+        if st.button("✅ 선택한 항목 모두 적용", type="primary", use_container_width=True):
+            _apply_ambiguity_selections(kobis_ambiguous, admin_ambiguous, outcomes)
+            st.session_state.results = outcomes
+            st.rerun()
 
     # 매칭 실패
     if failures:
@@ -326,8 +281,95 @@ def render_result_screen() -> None:
 
 
 from kobis import search_movies_with_fallback
-from matcher import MatchOutcome, build_outcome, pick_admin_match
+from matcher import (
+    MatchOutcome,
+    build_outcome,
+    pick_admin_match,
+    sort_kobis_by_similarity,
+    sort_admin_by_similarity,
+)
 from excel import MatchResult
+
+
+def _apply_ambiguity_selections(kobis_ambiguous, admin_ambiguous, outcomes):
+    """라디오 선택을 일괄로 outcomes에 반영.
+
+    - KOBIS 동명이작 선택은 admin 재검색이 필요하므로 AdminClient 1개로 한꺼번에 처리
+    - admin-only 동명이작은 admin 호출 없이 데이터 변환만
+    """
+    # admin-only first (no network needed)
+    for idx, o in enumerate(admin_ambiguous):
+        pick = st.session_state.get(f"admin_ambig_{idx}")
+        outcome_idx = outcomes.index(o)
+        if pick is None:
+            outcomes[outcome_idx] = MatchOutcome(
+                user_input=o.user_input,
+                status="kobis_not_found",
+                reason="사용자가 admin 결과 중 선택 안 함",
+            )
+        else:
+            outcomes[outcome_idx] = MatchOutcome(
+                user_input=o.user_input,
+                status="success",
+                result=MatchResult(
+                    id=pick.id,
+                    code=pick.code,
+                    title=pick.title,
+                    release_date="",
+                ),
+                reason="사용자가 admin 후보 중 선택 (개봉일 미상)",
+            )
+
+    # KOBIS ambiguous needs fresh admin session
+    if not kobis_ambiguous:
+        return
+
+    email = st.session_state.admin_email
+    password = st.session_state.admin_password
+
+    progress_bar = st.progress(0.0)
+    status_text = st.empty()
+    total = len(kobis_ambiguous)
+
+    ad_client = AdminClient()
+    ad_client.start()
+    try:
+        status_text.text("admin 재로그인 중...")
+        if not ad_client.login(email, password):
+            for o in kobis_ambiguous:
+                idx = outcomes.index(o)
+                outcomes[idx] = MatchOutcome(
+                    user_input=o.user_input,
+                    status="admin_not_found",
+                    reason="admin 재로그인 실패",
+                )
+            return
+
+        for i, o in enumerate(kobis_ambiguous, start=1):
+            status_text.text(f"[{i}/{total}] {o.user_input} 적용 중...")
+            outcome_idx = outcomes.index(o)
+            pick = st.session_state.get(f"kobis_ambig_{i - 1}")
+            if pick is None:
+                outcomes[outcome_idx] = MatchOutcome(
+                    user_input=o.user_input,
+                    status="kobis_not_found",
+                    reason="사용자가 동명이작 중 선택 안 함",
+                )
+            else:
+                try:
+                    admin_candidates = ad_client.search(pick.title)
+                    admin_match = pick_admin_match(pick, admin_candidates)
+                    outcomes[outcome_idx] = build_outcome(o.user_input, pick, admin_match)
+                except Exception as exc:
+                    outcomes[outcome_idx] = MatchOutcome(
+                        user_input=o.user_input,
+                        status="admin_not_found",
+                        reason=f"admin 오류: {exc}",
+                    )
+            progress_bar.progress(i / total)
+        status_text.text("적용 완료")
+    finally:
+        ad_client.stop()
 
 
 def run_matching(titles: list) -> list:
