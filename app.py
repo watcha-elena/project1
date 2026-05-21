@@ -164,10 +164,10 @@ def render_result_screen() -> None:
 
     outcomes = st.session_state.results
 
-    # 상단 '새 작품 리스트로 시작' 버튼 (페이지 위쪽에서 빠르게 입력 화면 복귀)
-    top_back_col, _ = st.columns([2, 8])
+    # 상단 뒤로가기 버튼 (입력 화면으로 복귀)
+    top_back_col, _ = st.columns([1, 11])
     with top_back_col:
-        if st.button("← 새 작품 리스트로 시작", key="back_to_input_top"):
+        if st.button("←", key="back_to_input_top", help="새 작품 리스트로 시작"):
             st.session_state.results = None
             st.rerun()
 
