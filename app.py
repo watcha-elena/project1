@@ -268,34 +268,32 @@ def render_result_screen() -> None:
             st.session_state.results = outcomes
             st.rerun()
 
-    # 매칭 실패
-    if failures:
-        st.divider()
-        st.subheader("❌ 매칭 실패")
-        for o in failures:
-            st.markdown(f"- **{o.user_input}** — {o.reason}")
-
-    # 성공 결과 표
+    # 최종 결과 표 (모든 outcome을 입력 순서대로, 실패는 빈 칸)
     st.divider()
-    st.subheader("✅ 매칭 성공 결과")
-    if not successes:
-        st.info("매칭 성공한 작품이 없습니다.")
-    else:
-        results = [o.result for o in successes]
-        df = pd.DataFrame(
-            [(r.id, r.code, r.title, r.release_date) for r in results],
-            columns=["id", "code", "title", "개봉일"],
-        )
-        st.dataframe(df, use_container_width=True, hide_index=True)
+    st.subheader("📋 최종 결과")
+    st.caption("입력한 작품 순서 그대로. 매칭에 실패하거나 미선택인 항목은 id/code/개봉일이 빈 칸입니다.")
 
-        # 엑셀 다운로드
-        ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
-        st.download_button(
-            label="💾 엑셀 파일 받기 (4컬럼)",
-            data=xlsx_bytes(results),
-            file_name=f"편성_매칭결과_{ts}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+    rows = []
+    for o in outcomes:
+        if o.status == "success" and o.result is not None:
+            rows.append((o.result.id, o.result.code, o.user_input, o.result.release_date))
+        else:
+            rows.append(("", "", o.user_input, ""))
+    df = pd.DataFrame(rows, columns=["id", "code", "title", "개봉일"])
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    # 엑셀 다운로드 (동일한 전체 행 사용)
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    excel_rows = [
+        MatchResult(id=r[0], code=r[1], title=r[2], release_date=r[3])
+        for r in rows
+    ]
+    st.download_button(
+        label="💾 엑셀 파일 받기 (4컬럼, 입력 순서)",
+        data=xlsx_bytes(excel_rows),
+        file_name=f"편성_매칭결과_{ts}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
     # 새 작업 시작
     st.divider()
