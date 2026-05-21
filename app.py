@@ -406,15 +406,30 @@ def _apply_ambiguity_selections(kobis_ambiguous, admin_ambiguous, admin_uncertai
                 try:
                     admin_candidates = ad_client.search(pick.title)
                     admin_match = pick_admin_match(pick, admin_candidates)
+
+                    # 1차 실패 + 사용자 입력이 KOBIS 선택지와 다르면 2차 검색
+                    if admin_match is None and o.user_input.strip() != pick.title.strip():
+                        try:
+                            extra = ad_client.search(o.user_input)
+                            seen_ids = {c.id for c in admin_candidates}
+                            for c in extra:
+                                if c.id not in seen_ids:
+                                    admin_candidates.append(c)
+                            admin_match = pick_admin_match(pick, admin_candidates)
+                        except Exception:
+                            pass
+
+                    relevant = _top_relevant_admin_candidates(
+                        o.user_input, pick, admin_candidates, limit=10
+                    )
+
                     if admin_match is not None:
                         outcomes[outcome_idx] = build_outcome(o.user_input, pick, admin_match)
-                    elif 1 <= len(admin_candidates) <= 5:
-                        # 사용자가 다시 한번 더 골라야 할 수도 있지만, 일괄 적용 흐름에서는
-                        # 자동 매칭 실패 → admin_not_found로 처리 (다음 라운드에서 확인)
+                    elif 1 <= len(relevant) <= 10:
                         outcomes[outcome_idx] = MatchOutcome(
                             user_input=o.user_input,
                             status="admin_uncertain",
-                            admin_candidates=admin_candidates,
+                            admin_candidates=relevant,
                             kobis_movie=pick,
                         )
                     else:
@@ -429,6 +444,35 @@ def _apply_ambiguity_selections(kobis_ambiguous, admin_ambiguous, admin_uncertai
         status_text.text("적용 완료")
     finally:
         ad_client.stop()
+
+
+def _top_relevant_admin_candidates(
+    user_input: str,
+    kobis_movie,
+    candidates: list,
+    limit: int = 10,
+) -> list:
+    """admin 후보 중 user_input 또는 KOBIS title과의 유사도가 높은 상위 N개를 반환.
+
+    제목 표기가 다른 동일 영화 대응을 위해 두 가지 검색어로 정렬해 합친다.
+    유사도 등급은 sort_admin_by_similarity가 부여(낮을수록 더 유사).
+    """
+    if not candidates:
+        return []
+
+    # 두 가지 쿼리로 각각 정렬 → 합집합에서 더 좋은 등급(더 작은 tier) 채택
+    by_user = sort_admin_by_similarity(user_input, candidates)
+    by_kobis = sort_admin_by_similarity(kobis_movie.title, candidates) if kobis_movie else by_user
+
+    # 각 후보의 더 좋은(낮은) 인덱스 = 더 유사
+    best_index = {}
+    for i, c in enumerate(by_user):
+        best_index[c.id] = min(best_index.get(c.id, i), i)
+    for i, c in enumerate(by_kobis):
+        best_index[c.id] = min(best_index.get(c.id, i), i)
+
+    sorted_unique = sorted(candidates, key=lambda c: best_index[c.id])
+    return sorted_unique[:limit]
 
 
 def run_matching(titles: list) -> list:
@@ -557,15 +601,33 @@ def run_matching(titles: list) -> list:
                 continue
 
             admin_match = pick_admin_match(kobis_movie, admin_candidates)
+
+            # 1차 실패 + 사용자 입력이 KOBIS 제목과 다르면 → 2차 admin 검색
+            if admin_match is None and title.strip() != kobis_movie.title.strip():
+                try:
+                    extra = admin_client.search(title)
+                    seen_ids = {c.id for c in admin_candidates}
+                    for c in extra:
+                        if c.id not in seen_ids:
+                            admin_candidates.append(c)
+                    admin_match = pick_admin_match(kobis_movie, admin_candidates)
+                except Exception:
+                    # 2차 검색 오류는 무시 — 1차 결과로 진행
+                    pass
+
+            # 표시용 후보는 유사도 순 정렬 후 상위 10건
+            relevant = _top_relevant_admin_candidates(
+                title, kobis_movie, admin_candidates, limit=10
+            )
+
             if admin_match is not None:
                 outcomes.append(build_outcome(title, kobis_movie, admin_match))
-            elif 1 <= len(admin_candidates) <= 5:
-                # 엄격 매칭 실패했지만 admin 후보가 적당 → 사용자가 확인/선택
+            elif 1 <= len(relevant) <= 10:
                 outcomes.append(
                     MatchOutcome(
                         user_input=title,
                         status="admin_uncertain",
-                        admin_candidates=admin_candidates,
+                        admin_candidates=relevant,
                         kobis_movie=kobis_movie,
                     )
                 )
