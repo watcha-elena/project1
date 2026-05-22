@@ -5,6 +5,43 @@ from admin import AdminClient
 from auth import LoginRateLimiter
 import pandas as pd
 
+import subprocess
+import sys
+from pathlib import Path
+
+
+@st.cache_resource
+def ensure_playwright_browser() -> bool:
+    """Streamlit Cloud 환경 등에서 Chromium 바이너리가 없으면 자동 설치.
+
+    @st.cache_resource 덕분에 세션당 1회만 실행된다.
+    로컬 개발 환경(이미 chromium 설치됨)에서는 즉시 True 반환.
+    """
+    # Playwright가 기대하는 cache 경로 확인
+    cache_dirs = [
+        Path.home() / ".cache" / "ms-playwright",
+        Path("/home/appuser/.cache/ms-playwright"),  # Streamlit Cloud 사용자
+    ]
+    for cache_dir in cache_dirs:
+        if cache_dir.exists() and any(cache_dir.glob("chromium-*")):
+            return True
+
+    # 설치 시도
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        return True
+    except subprocess.CalledProcessError as exc:
+        # 권한이나 네트워크 문제 등으로 실패. 앱은 죽이지 않고 False만 반환.
+        return False
+    except Exception:
+        return False
+
 
 PAGE_TITLE = "편성작 검색기"
 MAX_TITLES = 100
@@ -51,34 +88,14 @@ def render_login_screen() -> None:
         if not email or not password:
             st.warning("email과 password를 모두 입력하세요.")
             return
-        with st.spinner("admin 로그인 중..."):
-            test_client = AdminClient()
-            test_client.start()
-            try:
-                ok = test_client.login(email, password)
-            except Exception as exc:
-                limiter.record_failure()
-                st.error(f"로그인 중 오류: {exc}")
-                return
-            finally:
-                test_client.stop()
-        if ok:
-            limiter.record_success()
-            # 자격증명만 메모리에 보관. 매칭 실행 시마다 새 브라우저로 재로그인.
-            st.session_state.admin_email = email
-            st.session_state.admin_password = password
-            st.session_state.logged_in = True
-            st.rerun()
-        else:
-            limiter.record_failure()
-            remaining_attempts = limiter.remaining_attempts
-            if remaining_attempts > 0:
-                st.error(
-                    f"ID 또는 비밀번호가 올바르지 않습니다. "
-                    f"남은 시도: {remaining_attempts}회"
-                )
-            else:
-                st.error("로그인 시도 초과. 5분간 잠금됩니다.")
+        # 로그인 화면에서는 자격증명을 메모리에만 저장.
+        # 실제 admin 인증은 매칭 시작 시점에 일어남 (lazy verification).
+        # 이유: Streamlit Cloud처럼 Playwright 초기화가 느리거나 실패할 수
+        # 있는 환경에서 로그인 자체가 안 되는 상황을 막기 위함.
+        st.session_state.admin_email = email
+        st.session_state.admin_password = password
+        st.session_state.logged_in = True
+        st.rerun()
 
 
 def render_main_screen() -> None:
@@ -487,23 +504,57 @@ def run_matching(titles: list) -> list:
 
     매번 새 AdminClient를 생성하고 로그인한 후 모든 작품을 처리.
     중간에 한 작품이 실패해도 다음 작품은 계속 처리.
+
+    admin 로그인은 여기서 lazy하게 시도. 실패 시 자격증명 클리어 + 로그인 화면 복귀.
     """
     api_key = st.secrets["KOBIS_API_KEY"]
     email = st.session_state.admin_email
     password = st.session_state.admin_password
+    limiter: LoginRateLimiter = st.session_state.rate_limiter
 
     progress_bar = st.progress(0.0)
     status_text = st.empty()
     outcomes: list = []
 
+    # AdminClient 시작 (Playwright/Chromium 초기화)
     admin_client = AdminClient()
-    admin_client.start()
     try:
-        # admin 재로그인 (매칭 세션마다 새 브라우저)
+        status_text.text("관리자 시스템 준비 중...")
+        admin_client.start()
+    except Exception as exc:
+        st.error(
+            f"관리자 검색 기능을 시작할 수 없습니다 (Playwright 초기화 실패): {exc}\n\n"
+            "잠시 후 다시 시도하거나 관리자에게 문의해주세요."
+        )
+        return []
+
+    try:
+        # admin 인증 (lazy verification — 로그인 화면에서 미루어진 검증)
         status_text.text("admin에 로그인 중...")
-        if not admin_client.login(email, password):
-            st.error("admin 로그인에 실패했습니다. 로그아웃 후 다시 시도해주세요.")
+        try:
+            login_ok = admin_client.login(email, password)
+        except Exception as exc:
+            st.error(f"관리자 로그인 중 오류: {exc}")
             return []
+
+        if not login_ok:
+            # 자격증명 잘못됨 → 자격증명 클리어 + 로그인 화면 복귀
+            limiter.record_failure()
+            remaining = limiter.remaining_attempts
+            st.session_state.admin_email = None
+            st.session_state.admin_password = None
+            st.session_state.logged_in = False
+            st.session_state.results = None
+            if remaining > 0:
+                st.error(
+                    f"ID 또는 비밀번호가 올바르지 않습니다. "
+                    f"남은 시도: {remaining}회. 다시 로그인해주세요."
+                )
+            else:
+                st.error("로그인 시도 초과. 5분간 잠금됩니다.")
+            return []
+        else:
+            limiter.record_success()
 
         total = len(titles)
         for i, title in enumerate(titles, start=1):
@@ -677,6 +728,10 @@ def main() -> None:
         unsafe_allow_html=True,
     )
     init_session_state()
+
+    # Streamlit Cloud 등 Chromium 미설치 환경 대비: 한 번만 자동 설치 시도
+    # 실패해도 앱은 계속 동작 (로그인 후 매칭 시점에 에러 표시됨)
+    ensure_playwright_browser()
 
     if st.session_state.logged_in:
         render_main_screen()
