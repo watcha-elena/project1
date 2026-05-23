@@ -93,15 +93,19 @@ class AdminClient:
         submit = page.locator('button:has-text("제출"), input[type="submit"]').first
         submit.click()
 
-        # 로그인 후 영화 페이지로 이동 시도
+        # 로그인 후 페이지 로드 대기
         page.wait_for_load_state("domcontentloaded")
 
-        # 로그인 성공 검증: 영화 페이지로 직접 이동해 검색 박스 존재 확인
-        page.goto(ADMIN_MOVIES_URL, wait_until="domcontentloaded")
-        search_input = page.locator(
-            'input[placeholder*="Search for title"]'
-        )
-        self._logged_in = search_input.count() > 0
+        # 로그인 성공 판정: 로그인 페이지(/brew/session/new)에서 벗어났는지로 판단.
+        # 사유: 계정별로 권한/UI가 달라 영화 페이지 검색 박스 존재로 판정하면
+        # 정상 로그인된 계정도 false negative가 발생함.
+        # 실패 시 admin은 로그인 페이지에 남거나 같은 URL로 다시 렌더링됨.
+        self._logged_in = "/brew/session/new" not in page.url
+
+        # 검색을 위해 영화 페이지로 이동 (로그인 성공인 경우만)
+        if self._logged_in:
+            page.goto(ADMIN_MOVIES_URL, wait_until="domcontentloaded")
+
         return self._logged_in
 
     def search(self, title: str) -> "list[AdminMatch]":

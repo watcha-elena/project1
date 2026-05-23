@@ -113,8 +113,11 @@ def render_main_screen() -> None:
     if st.session_state.pending_titles is not None:
         with st.spinner("매칭 진행 중..."):
             outcomes = run_matching(st.session_state.pending_titles)
-        st.session_state.results = outcomes
         st.session_state.pending_titles = None
+        # 빈 결과(로그인 실패 등)는 결과 화면으로 넘기지 않음.
+        # run_matching이 이미 logged_in=False 처리했으면 로그인 화면으로 돌아감.
+        if outcomes:
+            st.session_state.results = outcomes
         st.rerun()
 
     if st.session_state.results is not None:
